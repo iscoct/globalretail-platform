@@ -1,0 +1,134 @@
+# --------------------------------------------------------------------------- #
+# Infra apply — runs `terraform apply` on push to main for both layers
+# (Layer 1 infra and Layer 2 cicd identity).
+#
+# GATED BY GITHUB ENVIRONMENT `platform-prod`:
+#   - The Platform-RW UAMI's federated credential subject is
+#     `repo:OWNER/REPO:environment:platform-prod`.
+#   - GitHub will NOT issue an OIDC token for this subject until the
+#     environment's required reviewer has approved the run in the UI.
+#   - Approval is logged in the GitHub Audit Log and in Azure sign-in logs.
+#
+# What the Platform-RW UAMI is allowed to do (see cicd/terraform/main.tf):
+#   - Contributor on the subscription (create/modify Azure resources)
+#   - User Access Administrator on the subscription (create role assignments)
+#   - Storage Blob Data Contributor on the tfstate SA (read/write state)
+#
+# What it CANNOT do without a tenant admin first granting permissions:
+#   - Create Entra ID security groups (the AKS admin group). For that
+#     reason, Layer 1's `create_aks_admin_group` must be `false` when
+#     running from this workflow, OR the group must have been created
+#     by the laptop-first bootstrap. See cicd/README.md §5 and §6.
+# --------------------------------------------------------------------------- #
+
+name: infra-apply
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'infra/**'
+      - 'cicd/terraform/**'
+      - '.github/workflows/infra-apply.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+# Apply is serial — never overlap two apply runs against the same state.
+concurrency:
+  group: infra-apply
+  cancel-in-progress: false
+
+env:
+  TF_VERSION: '1.13.3'
+
+jobs:
+  apply:
+    name: terraform apply (${{ matrix.layer.name }})
+    runs-on: ubuntu-24.04
+    # The environment gate. GitHub holds the run here until a reviewer
+    # configured in the environment settings approves it.
+    environment: platform-prod
+    strategy:
+      fail-fast: true
+      max-parallel: 1   # apply layers sequentially, layer 1 → layer 2
+      matrix:
+        layer:
+          - { name: layer1-infra,        dir: infra,           backend_key: infra/dev/terraform.tfstate, order: 1 }
+          - { name: layer2-cicd,         dir: cicd/terraform,  backend_key: cicd/dev/terraform.tfstate,  order: 2 }
+    defaults:
+      run:
+        working-directory: ${{ matrix.layer.dir }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Azure login (OIDC, Platform-RW UAMI, env-gated)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID_INFRA_APPLY }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Write backend.hcl
+        run: |
+          cat > backend.hcl <<EOF
+          resource_group_name  = "${{ vars.TFSTATE_RG }}"
+          storage_account_name = "${{ vars.TFSTATE_STORAGE_ACCOUNT }}"
+          container_name       = "tfstate"
+          key                  = "${{ matrix.layer.backend_key }}"
+          use_azuread_auth     = true
+          subscription_id      = "${{ vars.AZURE_SUBSCRIPTION_ID }}"
+          tenant_id            = "${{ vars.AZURE_TENANT_ID }}"
+          EOF
+
+      - name: Write terraform.tfvars
+        run: |
+          cat > terraform.tfvars <<EOF
+          subscription_id = "${{ vars.AZURE_SUBSCRIPTION_ID }}"
+          tenant_id       = "${{ vars.AZURE_TENANT_ID }}"
+          owner           = "${{ vars.OWNER_TAG }}"
+          EOF
+          if [ "${{ matrix.layer.dir }}" = "infra" ]; then
+            # CI cannot create Entra ID groups (no tenant permissions). The
+            # bootstrap step creates the group; CI must NOT try to manage it.
+            echo 'create_aks_admin_group = false' >> terraform.tfvars
+          fi
+          if [ "${{ matrix.layer.dir }}" = "cicd/terraform" ]; then
+            cat >> terraform.tfvars <<EOF
+          layer1_tfstate_storage_account = "${{ vars.TFSTATE_STORAGE_ACCOUNT }}"
+          github_owner = "${{ github.repository_owner }}"
+          github_repo  = "${{ github.event.repository.name }}"
+          EOF
+          fi
+
+      - name: Terraform init
+        run: terraform init -backend-config=backend.hcl -input=false
+
+      - name: Terraform validate
+        run: terraform validate
+
+      - name: Terraform plan (out=tfplan)
+        run: terraform plan -input=false -out=tfplan
+
+      - name: Terraform apply
+        run: terraform apply -input=false -auto-approve tfplan
+
+      - name: Job summary
+        if: always()
+        run: |
+          {
+            echo "### Terraform apply — \`${{ matrix.layer.name }}\`"
+            echo ""
+            echo "- Status     : ${{ job.status }}"
+            echo "- Triggered  : ${{ github.event_name }} on \`${{ github.ref_name }}\`"
+            echo "- Approver   : (see the environment protection log in the Actions UI)"
+          } >> "$GITHUB_STEP_SUMMARY"

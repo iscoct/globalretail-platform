@@ -1,0 +1,21 @@
+# Terraform local working directories.
+**/.terraform/*
+
+# State files — defense in depth (we use a remote backend).
+*.tfstate
+*.tfstate.*
+
+# Crash logs.
+crash.log
+crash.*.log
+
+# Concrete variable values (subscription/tenant IDs, GitHub owner/repo).
+*.tfvars
+*.tfvars.json
+!*.tfvars.example
+
+# Backend config (regenerable; contains tfstate SA name).
+backend.hcl
+
+# Plan output.
+*.tfplan

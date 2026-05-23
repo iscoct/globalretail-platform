@@ -1,0 +1,148 @@
+# --------------------------------------------------------------------------- #
+# Infra plan — read-only `terraform plan` for both layers, runs on PRs that
+# touch infra/ or cicd/terraform/. The plan output gets posted as a comment
+# on the PR so reviewers see what apply would do without anyone needing to
+# run terraform locally.
+#
+# Authentication: OIDC against the Platform-RO UAMI. This identity has
+# `Reader` on the subscription + `Storage Blob Data Reader` on the tfstate
+# storage account — read-only. A malicious PR cannot use it to change Azure.
+# --------------------------------------------------------------------------- #
+
+name: infra-plan
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'infra/**'
+      - 'cicd/terraform/**'
+      - '.github/workflows/infra-plan.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write   # to comment the plan on the PR
+  id-token: write        # mint the OIDC token for azure/login
+
+concurrency:
+  group: infra-plan-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  TF_VERSION: '1.13.3'
+
+jobs:
+  plan:
+    name: terraform plan (${{ matrix.layer.name }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        layer:
+          - { name: layer1-infra,        dir: infra,           backend_key: infra/dev/terraform.tfstate }
+          - { name: layer2-cicd,         dir: cicd/terraform,  backend_key: cicd/dev/terraform.tfstate }
+    defaults:
+      run:
+        working-directory: ${{ matrix.layer.dir }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: true   # captures stdout for PR comment step
+
+      - name: Azure login (OIDC, Platform-RO UAMI)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID_INFRA_PLAN }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Write backend.hcl
+        run: |
+          cat > backend.hcl <<EOF
+          resource_group_name  = "${{ vars.TFSTATE_RG }}"
+          storage_account_name = "${{ vars.TFSTATE_STORAGE_ACCOUNT }}"
+          container_name       = "tfstate"
+          key                  = "${{ matrix.layer.backend_key }}"
+          use_azuread_auth     = true
+          subscription_id      = "${{ vars.AZURE_SUBSCRIPTION_ID }}"
+          tenant_id            = "${{ vars.AZURE_TENANT_ID }}"
+          EOF
+
+      - name: Write terraform.tfvars
+        # The repo holds NO concrete tfvars (subscription IDs etc. are NOT
+        # committed). The workflow synthesises one from repo vars at run time.
+        run: |
+          cat > terraform.tfvars <<EOF
+          subscription_id = "${{ vars.AZURE_SUBSCRIPTION_ID }}"
+          tenant_id       = "${{ vars.AZURE_TENANT_ID }}"
+          owner           = "${{ vars.OWNER_TAG }}"
+          EOF
+          if [ "${{ matrix.layer.dir }}" = "cicd/terraform" ]; then
+            cat >> terraform.tfvars <<EOF
+          layer1_tfstate_storage_account = "${{ vars.TFSTATE_STORAGE_ACCOUNT }}"
+          github_owner = "${{ github.repository_owner }}"
+          github_repo  = "${{ github.event.repository.name }}"
+          EOF
+          fi
+
+      - name: Terraform init
+        run: terraform init -backend-config=backend.hcl -input=false
+
+      - name: Terraform validate
+        run: terraform validate
+
+      - name: Terraform plan
+        id: plan
+        run: terraform plan -no-color -input=false -out=tfplan
+        continue-on-error: true
+
+      - name: Post plan output to PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        env:
+          PLAN_STDOUT: ${{ steps.plan.outputs.stdout }}
+          LAYER_NAME: ${{ matrix.layer.name }}
+          PLAN_OUTCOME: ${{ steps.plan.outcome }}
+        with:
+          script: |
+            const layer  = process.env.LAYER_NAME;
+            const status = process.env.PLAN_OUTCOME;
+            let plan = process.env.PLAN_STDOUT || '(no plan output captured)';
+            // GitHub comment body cap is ~65k. Truncate aggressively if needed.
+            const MAX = 60000;
+            if (plan.length > MAX) {
+              plan = plan.slice(0, MAX) + '\n\n... [truncated; download workflow logs for full output] ...';
+            }
+            const body = [
+              `### Terraform plan — \`${layer}\`  (${status})`,
+              '',
+              '```hcl',
+              plan,
+              '```',
+            ].join('\n');
+            github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
+
+      - name: Fail job if plan errored
+        if: steps.plan.outcome == 'failure'
+        run: |
+          echo "Plan failed — see the PR comment for details."
+          exit 1
+
+      - name: Upload tfplan artifact
+        if: steps.plan.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan-${{ matrix.layer.name }}
+          path: ${{ matrix.layer.dir }}/tfplan
+          retention-days: 7

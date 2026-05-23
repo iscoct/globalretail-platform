@@ -1,0 +1,234 @@
+# --------------------------------------------------------------------------- #
+# GlobalRetail sample-app CI/CD
+#
+# Triggered on:
+#   - pull_request to main (paths under apps/sample-app/**): run all quality
+#     gates and BUILD/SCAN the image, but DO NOT push.
+#   - push to main (paths under apps/sample-app/**): run all quality gates,
+#     build, scan, AND push to ACR.
+#
+# Authentication to Azure is OIDC-only (federated identity).
+# No PATs, no client secrets, no service principal passwords anywhere.
+# See cicd/terraform/main.tf for how the federation is wired up.
+# --------------------------------------------------------------------------- #
+
+name: app-ci
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'apps/sample-app/**'
+      - '.github/workflows/app-ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'apps/sample-app/**'
+      - '.github/workflows/app-ci.yml'
+  # Allow rerunning manually from the Actions tab without pushing a commit.
+  workflow_dispatch:
+
+# Minimal permissions, scoped per job below. The repo-level default for new
+# repos is read-only; we set it explicitly so the file is self-contained.
+permissions:
+  contents: read
+
+# A new run of the same workflow on the same ref cancels the previous one.
+# Saves runner minutes and avoids two runs racing to push the same image tag.
+concurrency:
+  group: app-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '20'
+  # The app lives under apps/sample-app in the monorepo. All Node/Docker
+  # commands run from there.
+  APP_DIR: apps/sample-app
+
+jobs:
+  # ------------------------------------------------------------------------- #
+  # Stage 1 — Install deps + unit tests.
+  # Fast feedback loop: if this fails, nothing else matters.
+  # ------------------------------------------------------------------------- #
+  test:
+    name: Unit tests
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: ${{ env.APP_DIR }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: ${{ env.APP_DIR }}/package-lock.json
+
+      - name: Install (npm ci)
+        run: npm ci
+
+      - name: Unit tests (jest + coverage)
+        run: npm test
+
+      - name: Upload coverage artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: ${{ env.APP_DIR }}/coverage/
+          retention-days: 7
+
+  # ------------------------------------------------------------------------- #
+  # Stage 2 — SAST (Static Application Security Testing) with CodeQL.
+  # Runs in parallel with the test job. CodeQL builds the source and looks
+  # for known vulnerable patterns (SQL injection, XSS, path traversal,
+  # hardcoded secrets, etc.). Findings surface on the Security tab of the repo.
+  # ------------------------------------------------------------------------- #
+  sast:
+    name: SAST (CodeQL)
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      security-events: write   # to upload the SARIF results
+      actions: read            # CodeQL needs this for some queries
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: javascript-typescript
+          queries: security-extended
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: '/language:javascript-typescript'
+
+  # ------------------------------------------------------------------------- #
+  # Stage 3 — SCA (Software Composition Analysis) with npm audit.
+  # Checks the package-lock.json against the npm registry's known-vulnerability
+  # database. We exclude devDependencies (jest) — those never ship in the
+  # image. Fail on HIGH or CRITICAL in production deps. Dependabot opens PRs
+  # to bump vulnerable packages between CI runs.
+  # ------------------------------------------------------------------------- #
+  sca:
+    name: SCA (npm audit)
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: ${{ env.APP_DIR }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: ${{ env.APP_DIR }}/package-lock.json
+
+      - name: Install (npm ci)
+        run: npm ci
+
+      - name: npm audit (production deps only, HIGH/CRITICAL = fail)
+        run: npm run audit:ci
+
+  # ------------------------------------------------------------------------- #
+  # Stage 4-5 — Build the image, scan it, push to ACR.
+  #
+  # Build + scan run on every trigger. Push only runs on push to main (see
+  # the `if:` guard).
+  # ------------------------------------------------------------------------- #
+  build-scan-push:
+    name: Build, scan, push
+    runs-on: ubuntu-24.04
+    needs: [test, sast, sca]
+    permissions:
+      contents: read
+      id-token: write         # required to mint the OIDC token for azure/login
+      security-events: write  # to upload Trivy's SARIF findings
+    env:
+      IMAGE_REPO: globalretail/sample-app
+      IMAGE_TAG_SHA: sha-${{ github.sha }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image (local tag only)
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ env.APP_DIR }}
+          file: ${{ env.APP_DIR }}/Dockerfile
+          load: true                # load into local docker for scanning
+          push: false
+          tags: |
+            ${{ env.IMAGE_REPO }}:${{ env.IMAGE_TAG_SHA }}
+            ${{ env.IMAGE_REPO }}:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Trivy image scan (HIGH, CRITICAL = fail)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ env.IMAGE_REPO }}:ci
+          format: sarif
+          output: trivy-results.sarif
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+          ignore-unfixed: true
+
+      - name: Upload Trivy results to GitHub Security tab
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results.sarif
+          category: trivy-image
+
+      # ------------- Push to ACR — only on push to main --------------------- #
+      - name: Azure login (OIDC, App UAMI)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID_APP }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: ACR login
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: az acr login --name "${{ vars.ACR_NAME }}"
+
+      - name: Tag image with ACR reference
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          docker tag "${IMAGE_REPO}:${IMAGE_TAG_SHA}" "${{ vars.ACR_LOGIN_SERVER }}/${IMAGE_REPO}:${IMAGE_TAG_SHA}"
+          docker tag "${IMAGE_REPO}:${IMAGE_TAG_SHA}" "${{ vars.ACR_LOGIN_SERVER }}/${IMAGE_REPO}:main"
+
+      - name: Push to ACR
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          docker push "${{ vars.ACR_LOGIN_SERVER }}/${IMAGE_REPO}:${IMAGE_TAG_SHA}"
+          docker push "${{ vars.ACR_LOGIN_SERVER }}/${IMAGE_REPO}:main"
+
+      - name: Job summary
+        if: always()
+        run: |
+          {
+            echo "### globalretail-sample-app CI"
+            echo ""
+            echo "- Image repo: \`${IMAGE_REPO}\`"
+            echo "- Build tag : \`${IMAGE_TAG_SHA}\`"
+            if [[ "${{ github.event_name }}" == "push" && "${{ github.ref }}" == "refs/heads/main" ]]; then
+              echo "- Pushed to : \`${{ vars.ACR_LOGIN_SERVER }}/${IMAGE_REPO}:${IMAGE_TAG_SHA}\` and \`:main\`"
+            else
+              echo "- Push     : skipped (this is a PR or non-main push)"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,38 @@
+# Terraform local working directories — contain downloaded providers.
+**/.terraform/*
+**/.terraform.lock.hcl
+
+# State files — defense in depth (we use a remote backend).
+*.tfstate
+*.tfstate.*
+
+# Crash logs.
+crash.log
+crash.*.log
+
+# Concrete variable values — they contain subscription / tenant IDs that we
+# don't want to leak in a public repo. The .example file IS committed.
+*.tfvars
+*.tfvars.json
+!*.tfvars.example
+
+# Backend config emitted by bootstrap.ps1 — contains tfstate SA name + RG.
+# Regenerable; safer not to commit.
+backend.hcl
+!backend.hcl.example
+
+# Plan output files.
+*.tfplan
+
+# Node.
+node_modules/
+coverage/
+.nyc_output/
+*.log
+
+# OS / editor.
+.DS_Store
+.idea/
+*.swp
+.env
+.env.local

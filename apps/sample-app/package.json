@@ -1,0 +1,34 @@
+{
+  "name": "globalretail-sample-app",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Reference sample app for the GlobalRetail platform Layer 2 CI/CD pipeline.",
+  "main": "src/index.js",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "jest --coverage",
+    "audit:ci": "npm audit --audit-level=high --omit=dev"
+  },
+  "dependencies": {
+    "express": "4.22.2"
+  },
+  "devDependencies": {
+    "jest": "29.7.0",
+    "supertest": "7.0.0"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "collectCoverageFrom": [
+      "src/**/*.js"
+    ],
+    "coverageThreshold": {
+      "global": {
+        "lines": 80,
+        "statements": 80
+      }
+    }
+  }
+}

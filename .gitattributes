@@ -1,0 +1,18 @@
+# Default: normalise line endings to LF on commit.
+* text=auto eol=lf
+
+# Scripts that must remain LF (shell, bash) regardless of OS.
+*.sh   text eol=lf
+*.bash text eol=lf
+
+# Windows scripts.
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary safety nets.
+*.png  binary
+*.jpg  binary
+*.gif  binary
+*.ico  binary
+*.pdf  binary

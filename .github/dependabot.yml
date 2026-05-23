@@ -1,0 +1,40 @@
+# Dependabot opens PRs to bump dependencies with known vulnerabilities or
+# stale versions. It is the *between-CI-runs* arm of supply chain hygiene —
+# npm audit in CI catches what's already in main; Dependabot proposes fixes.
+#
+# We keep the cadence weekly to avoid churn. Security alerts (vs version
+# bumps) still open immediately regardless of `interval` — that's a separate
+# GitHub-native behaviour.
+
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - npm
+    commit-message:
+      prefix: chore(deps)
+      include: scope
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    labels:
+      - dependencies
+      - docker
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    labels:
+      - dependencies
+      - github-actions

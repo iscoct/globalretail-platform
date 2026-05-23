@@ -1,0 +1,21 @@
+# Copy to terraform.tfvars (which is gitignored) and fill in YOUR Azure values.
+# Then:
+#   terraform init -backend-config=backend.hcl
+#   terraform plan
+#   terraform apply
+#
+# IMPORTANT: never commit terraform.tfvars (it is in .gitignore). The repo
+# stays portable — anyone who forks it should be able to deploy into THEIR
+# own subscription by editing only their local copy of this file.
+
+# --- Required (no defaults) ---------------------------------------------------
+subscription_id = ""   # az account show --query id -o tsv
+tenant_id       = ""   # az account show --query tenantId -o tsv
+
+# --- Optional (all have defaults — uncomment to override) ---------------------
+# workload       = "globalretail"
+# environment    = "dev"
+# location       = "westeurope"
+# location_short = "weu"
+# owner          = "your.name"
+# vnet_address_space = ["10.0.0.0/16"]
