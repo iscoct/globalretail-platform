@@ -1,0 +1,35 @@
+# Tells the Prometheus Operator to scrape the sample-app Service.
+#
+# Prometheus Operator reads ServiceMonitor CRs and turns them into scrape
+# configs that the Prometheus pod uses. The selector matches the Service
+# we created in Layer 3 (gitops/workloads/sample-app/base/service.yaml).
+
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: sample-app
+  # The ServiceMonitor lives WITH the workload, not in the prometheus
+  # namespace. The operator finds it because we set
+  # serviceMonitorSelectorNilUsesHelmValues=false in the chart values.
+  namespace: sample-app
+  labels:
+    app.kubernetes.io/name: sample-app
+    app.kubernetes.io/part-of: globalretail
+spec:
+  # Service selector — match the sample-app Service.
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: sample-app
+  namespaceSelector:
+    matchNames:
+      - sample-app
+  endpoints:
+    # The Service exposes port `http` (port 80 → pod 3000). Prometheus
+    # scrapes /metrics on that endpoint every 30s.
+    - port: http
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s
+      # We could honor relabel rules here to drop noisy series; skipped
+      # for the lab. Production typically rewrites pod-name labels into
+      # cleaner names and drops k8s "noise" labels via metricRelabelings.

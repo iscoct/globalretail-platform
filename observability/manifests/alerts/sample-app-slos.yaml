@@ -1,0 +1,131 @@
+# SLO + alert rules for the sample-app.
+#
+# SLO target: 99% of /health responses complete in under 100ms over a 30-day
+# window. This is the "RED" view (Rate / Errors / Duration) applied to the
+# only customer-facing route the sample-app has.
+#
+# The PrometheusRule contains TWO RuleGroup-shaped sections:
+#   - Recording rules: pre-compute the SLO metric so Grafana panels and
+#     burn-rate alerts can reference it cheaply.
+#   - Alerting rules: fire when burn rate exceeds the budget.
+#
+# Burn-rate alerting is the SRE-textbook approach (Sloth, Pyrra, Google SRE
+# Workbook chapter 5). The math: if your SLO says 99% over 30 days, you can
+# burn 1% (= 432 minutes) of "bad budget" per month. Alert when the *rate*
+# at which you're burning the budget would exhaust it in some window. Two
+# alerts: fast (5m window, very urgent) + slow (1h window, less urgent).
+
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: sample-app-slo
+  # Sit in the workload namespace; prometheus-operator's ruleSelector picks
+  # us up from anywhere.
+  namespace: sample-app
+  labels:
+    app.kubernetes.io/name: sample-app
+    app.kubernetes.io/part-of: globalretail
+spec:
+  groups:
+    # --- Recording rules -----------------------------------------------------
+    - name: sample-app.slo.recording
+      interval: 30s
+      rules:
+        # Total /health requests over 5m, by status.
+        - record: sample_app:http_health_total:rate5m
+          expr: |
+            sum by (status) (
+              rate(http_request_duration_seconds_count{
+                app="globalretail-sample-app", route="/health"
+              }[5m])
+            )
+
+        # Fraction of /health requests served under 100ms (= "good"
+        # responses). Histogram math: bucket {le=0.1} gives count of
+        # requests <=100ms; divide by total.
+        - record: sample_app:health_sli:ratio5m
+          expr: |
+            (
+              sum(rate(http_request_duration_seconds_bucket{
+                app="globalretail-sample-app", route="/health", le="0.1"
+              }[5m]))
+              /
+              sum(rate(http_request_duration_seconds_count{
+                app="globalretail-sample-app", route="/health"
+              }[5m]))
+            )
+
+        # Same, but over 1h — the slower burn-rate window.
+        - record: sample_app:health_sli:ratio1h
+          expr: |
+            (
+              sum(rate(http_request_duration_seconds_bucket{
+                app="globalretail-sample-app", route="/health", le="0.1"
+              }[1h]))
+              /
+              sum(rate(http_request_duration_seconds_count{
+                app="globalretail-sample-app", route="/health"
+              }[1h]))
+            )
+
+    # --- Alerting rules ------------------------------------------------------
+    - name: sample-app.slo.alerts
+      interval: 30s
+      rules:
+        # FAST burn-rate: in the last 5 minutes, the SLI dropped below
+        # 95% — at this rate the entire 30-day error budget would be
+        # exhausted in ~2 days. Page someone.
+        - alert: SampleAppHealthSLOFastBurn
+          expr: |
+            (
+              sample_app:health_sli:ratio5m < 0.95
+            )
+          for: 2m
+          labels:
+            severity: critical
+            slo: sample-app-health-latency
+          annotations:
+            summary: 'sample-app /health p99 burning SLO budget fast (5m window)'
+            description: |
+              {{ $value | humanizePercentage }} of /health responses in the
+              last 5 minutes completed within 100ms. SLO target is 99%. At
+              this rate the 30-day budget is gone in ~2 days.
+            runbook_url: 'https://github.com/iscoct/globalretail-platform/blob/main/observability/README.md#runbooks'
+
+        # SLOW burn-rate: in the last hour, the SLI dropped below 98% —
+        # still bad, just less urgent. Ticket someone (not page).
+        - alert: SampleAppHealthSLOSlowBurn
+          expr: |
+            (
+              sample_app:health_sli:ratio1h < 0.98
+            )
+          for: 15m
+          labels:
+            severity: warning
+            slo: sample-app-health-latency
+          annotations:
+            summary: 'sample-app /health p99 burning SLO budget (1h window)'
+            description: |
+              {{ $value | humanizePercentage }} of /health responses over the
+              last hour completed within 100ms. SLO target is 99%.
+
+        # No data: the scrape itself is failing. This is a different kind
+        # of "alert that the alert isn't being computed" — meta but
+        # important in production. Without this you can't distinguish "all
+        # is well, no data needed" from "Prometheus can't reach the pod".
+        - alert: SampleAppMetricsScrapeMissing
+          expr: |
+            absent(http_request_duration_seconds_count{
+              app="globalretail-sample-app"
+            })
+          for: 5m
+          labels:
+            severity: warning
+            slo: sample-app-health-latency
+          annotations:
+            summary: 'sample-app /metrics scrape is missing data'
+            description: |
+              Prometheus has not received any http_request_duration_seconds
+              samples from the sample-app for 5 minutes. Likely causes:
+              ServiceMonitor selector mismatch, pod CrashLoopBackOff, /metrics
+              endpoint returning 5xx, prometheus operator not reconciling.
