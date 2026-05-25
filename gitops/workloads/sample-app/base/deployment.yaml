@@ -64,10 +64,19 @@ spec:
             periodSeconds: 10
             timeoutSeconds: 3
             failureThreshold: 3
-          # Distroless runs as nonroot by default. We make the security
-          # context explicit so it survives a base image swap.
+          # Distroless's nonroot user is 65532:65532, but the image's USER
+          # directive uses the STRING 'nonroot' rather than the numeric uid.
+          # Kubernetes' `runAsNonRoot: true` check requires the uid to be
+          # numerically verifiable BEFORE the container starts — a string
+          # username is not enough. Without an explicit `runAsUser: 65532`
+          # the pod fails to create with:
+          #   "container has runAsNonRoot and image has non-numeric user
+          #   (nonroot), cannot verify user is non-root"
+          # See pitfall §6.2 in gitops/README.md.
           securityContext:
             runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities:
