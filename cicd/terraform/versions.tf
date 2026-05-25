@@ -10,4 +10,10 @@ terraform {
       version = "~> 4.0"
     }
   }
+
+  # All backend values come from -backend-config=backend.hcl at init time.
+  # The empty backend block makes Terraform USE the azurerm backend; without
+  # it, terraform init silently falls back to local state (one of the most
+  # subtle pitfalls when adopting remote state).
+  backend "azurerm" {}
 }
