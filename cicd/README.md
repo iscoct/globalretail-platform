@@ -278,7 +278,62 @@ Layer 1 must exist before Layer 2 can plan, let alone apply.
 
 ## 6. Pitfalls and gotchas
 
-`[TBD-AFTER-BUILD]` — filled in after the first end-to-end run reveals what breaks.
+Eight pitfalls hit during the first end-to-end run on 2026-05-25. Each entry: **symptom**, **root cause**, **fix**.
+
+### 6.1 `aquasecurity/trivy-action@0.28.0` does not exist
+**Symptom:** Workflow's `Build, scan, push` job fails at "Set up job" with
+`Unable to resolve action 'aquasecurity/trivy-action@0.28.0', unable to find version '0.28.0'`.
+**Cause:** Tags on the trivy-action repo follow the `vX.Y.Z` convention (with a leading `v`). I had pinned `0.28.0` — a tag that simply does not exist. The action setup phase silently fails when the tag is not found, *before* any step actually runs.
+**Fix:** Look at the actual releases (`gh api repos/aquasecurity/trivy-action/releases --jq '.[].tag_name'`) and pin to a real `v`-prefixed version. We use `v0.36.0`. Same care needed for any third-party action — copy-pasted tags from blog posts age badly.
+
+### 6.2 Distroless base images ship unfixed-in-upstream OS CVEs
+**Symptom:** Trivy reports HIGH/CRITICAL CVEs against `libssl3` in our supposedly "0 CVE" distroless image. Specifically:
+```
+CVE-2026-31789 CRITICAL  libssl3 3.0.18-1~deb12u2 (fixed 3.0.19-1~deb12u2)
+CVE-2026-28387 HIGH      ...
+```
+**Cause:** Distroless images are rebuilt periodically against upstream Debian. Between a Debian package update and the next distroless rebuild there is a window — sometimes weeks — where Trivy sees a CVE whose fix is *available in Debian* but *not yet shipped in the distroless image*. There is nothing we can patch from our side.
+**Fix:** A `.trivyignore` file listing the specific CVE IDs. Production teams keep this short, comment every entry with the upstream rebuild URL, and review quarterly. Tried `exp:YYYY-MM-DD` (Trivy's expiration syntax) but the trivy-action wrapper's SARIF flow doesn't honor it — see §6.3 — so we use plain CVE IDs and rely on calendar reminders to revisit.
+
+### 6.3 Trivy `.trivyignore` doesn't filter exit-code when output is SARIF
+**Symptom:** Even with `.trivyignore` correctly loaded (workflow log shows `Found ignorefile 'apps/sample-app/.trivyignore'` with the right content), the Trivy step still fails with exit 1.
+**Cause:** Specific to `aquasecurity/trivy-action` + `format: sarif`: the ignore list is applied to the SARIF *output* (so the GitHub Security tab is clean), but the exit-code computation happens *before* the ignore filter is applied. Net result: the build still fails on ignored CVEs.
+**Fix:** Split into two Trivy invocations. First with `format: sarif` + `exit-code: 0` for the upload (informational). Second with `format: table` + `exit-code: 1` + `trivyignores:` — table format honours the ignore file for exit-code computation. Confirmed: the build now passes with the same image, same ignore file.
+
+### 6.4 Branch protection blocks even CI-fix pushes
+**Symptom:** While the workflows themselves are buggy and you want to push a small fix to `main` directly, `git push` is rejected with `(protected branch hook declined)`.
+**Cause:** This is by design — `apply-branch-protection.ps1` enforces `enforce_admins = true`. There is no "I'll bypass just this once" path.
+**Fix:** Even tiny CI fixes go through a PR. The first time you hit this on a green-field repo it feels slow; after the third one, the muscle memory of `git checkout -b fix/X && git push -u && gh pr create && gh pr merge --squash` is faster than direct push ever was. Resist the temptation to disable the rule.
+
+### 6.5 `terraform plan` from the Platform-RO UAMI fails on state lock acquisition
+**Symptom:** infra-plan workflow fails with `Error acquiring the state lock — 403 AuthorizationPermissionMismatch ... blob metadata "terraformlockid" was empty`.
+**Cause:** Acquiring the Azure blob lease requires write access to the blob's metadata (`terraformlockid` field). The Platform-RO UAMI has `Storage Blob Data Reader` — which can read the blob but cannot write metadata. A read-only identity is, by design, unable to *write the lock that protects writes*.
+**Fix:** Pass `-lock=false` to `terraform plan` in `infra-plan.yml`. Plan is read-only by intent — multiple concurrent plans against the same state are safe (worst case the second one sees an outdated view that the first one's plan rendered moot). Apply (`infra-apply.yml`) keeps locking on, using the Platform-RW UAMI's `Storage Blob Data Contributor` role.
+
+### 6.6 CI UAMIs cannot refresh `azuread_*` resources
+**Symptom:** After fixing 6.5, infra-plan fails on Layer 1 with
+`Error: Retrieving Group (Group: "<id>") ... 403 Forbidden ... Authorization_RequestDenied: Insufficient privileges to complete the operation.`
+**Cause:** The Platform-RO and Platform-RW UAMIs hold only Azure RBAC roles. Reading or modifying Entra ID objects (groups, users, app registrations) requires *tenant-level* Microsoft Graph permissions like `Group.Read.All` — not subscription RBAC. By default a UAMI has no Graph permissions.
+**Fix (workflow-side, applied):** Pass `-refresh=false` to both `terraform plan` and `terraform apply` in CI. The CI UAMI never reads live Entra state — the workflow operates on the last known tfstate values. Trade-off documented: drift between Azure and tfstate is no longer detected by CI; it becomes the laptop operator's responsibility.
+**Fix (root-cause, not applied):** Grant the CI UAMIs an Entra ID role (`Directory.Read.All` for RO, `Group.ReadWrite.All` for RW) via a tenant admin. This is a one-shot tenant-admin operation that the lab cannot assume access to, so the workflow-side workaround stays as the default.
+
+### 6.7 Layer 1's `azuread_group.aks_admins` produces a phantom diff under CI
+**Symptom:** Even with `-refresh=false`, Layer 1 apply from CI fails with `Updating Group ... 403 Forbidden` on `azuread_group.aks_admins[0]`.
+**Cause:** Layer 1's group resource sets `owners` and `members` to `[data.azurerm_client_config.current.object_id]`. From a laptop, that data source returns the human user's object ID. From CI, it returns the *UAMI*'s object ID — different value. Terraform sees a diff between state (`owners = [<human-id>]`) and config (`owners = [<UAMI-id>]`), plans to update — and the UAMI cannot perform the update (no Entra ID Directory write).
+**Fix (workflow-side, applied):** Remove `layer1-infra` from the CI plan/apply matrices entirely. Layer 1 plan/apply runs from a laptop only. CI handles Layer 2 (and future layers that do not touch Entra ID).
+**Fix (root-cause, deferred):** Refactor Layer 1 to accept the admin user's object ID as a variable (`aks_admin_group_object_id`) instead of evaluating `data.azurerm_client_config.current.object_id` inline. Then config stays stable regardless of who runs Terraform. Documented as a future refactor; not applied because Layer 1 is intended to be a teaching artefact that explains the laptop bootstrap pattern.
+
+### 6.8 The missing `backend "azurerm" {}` block — silent fallback to local state
+**Symptom:** infra-apply from CI fails with `a resource with the ID "rg-cicd-globalretail-dev-weu" already exists - to be managed via Terraform this resource needs to be imported into the State`. The plan tried to *create* all 15 Layer 2 resources, even though the laptop apply had just succeeded.
+**Cause:** Layer 2's `versions.tf` was missing the `backend "azurerm" {}` declaration. With no backend declared, `terraform init -backend-config=backend.hcl` silently ignores the backend file and falls back to *local state*. Layer 2's apply from the laptop saved the state to a local `terraform.tfstate` in the working directory — invisible to CI. CI then connected to an empty remote state at `cicd/dev/terraform.tfstate` (since init created the SAS-leased blob) and rightly concluded "I need to create everything."
+**Fix:** Add `backend "azurerm" {}` to `cicd/terraform/versions.tf` (Layer 1 already had it). Then run `terraform init -backend-config=backend.hcl -migrate-state` to push the local state into the remote backend. Verified by `az storage blob list` showing both `infra/dev/terraform.tfstate` and `cicd/dev/terraform.tfstate` present.
+
+**Lesson:** the empty backend block is *load-bearing*. Without it, `-backend-config=` is a no-op and you get the worst possible failure mode — silently working until someone else tries to use your state.
+
+### Bonus — Dependabot PRs cannot mint OIDC tokens
+**Symptom:** All five Dependabot PRs that landed overnight reported `Login failed with Error: Using auth-type: SERVICE_PRINCIPAL. Not all values are present.`
+**Cause:** Dependabot workflows run with the `dependabot` actor, and by default GitHub does NOT issue OIDC tokens for that actor (security feature — an external repo bot otherwise could mint tokens against your federated identity). Repo vars (which `azure/login@v2` needs for `client-id` etc.) are also scoped separately for Dependabot via the `DEPENDABOT_*` namespace.
+**Fix (none applied):** This is expected behaviour, not a bug. For a public repo, Dependabot PRs will always fail the steps that touch Azure. The right approach is either (a) accept the failures, manually review the diff, and merge when satisfied; or (b) add a Dependabot-aware variant of the workflow that skips OIDC steps when `github.actor == 'dependabot[bot]'`. Documented; not implemented in this iteration.
 
 ## 7. Likely student questions and answers
 
@@ -339,10 +394,28 @@ A: GitHub JWT: ~15 minutes. The Entra ID token after exchange: ~1 hour. Both are
 ## Build progress
 
 - [x] Iteration 1: code drafted (TF + workflows + scripts + sample-app)
-- [ ] Iteration 2: end-to-end test (laptop bootstrap → laptop apply → push → workflow runs → image in ACR → PR plan visible → apply approved)
+- [x] Iteration 2: end-to-end test (bootstrap → laptop apply → push → workflow runs → image in ACR → PR plan visible → apply approved)
 - [ ] Iteration 3: cleanup verified (terraform destroy + repo cleanup)
-- [ ] Sub-README §6 (pitfalls) filled with real incidents
+- [x] Sub-README §6 (pitfalls) filled with real incidents
 
 ## Iteration log
 
-`[TBD-AFTER-BUILD]` — appended after each iteration with the same shape as Layer 1's log.
+### Iteration 1 — code drafted (2026-05-23)
+Wrote Terraform for 3 UAMIs + 4 federated credentials + 7 role assignments. Wrote three workflows (app-ci, infra-plan, infra-apply). Wrote three github-setup scripts (setup-environment, set-github-vars, apply-branch-protection). Wrote the sample-app (Node.js + Jest + Dockerfile distroless). Pushed to public repo `iscoct/globalretail-platform`. **Not tested end-to-end.**
+
+### Iteration 2 — end-to-end test (2026-05-25)
+Eight pitfalls discovered and documented in §6. Final state:
+- **Bootstrap (laptop):** `infra/bootstrap/bootstrap.ps1` provisioned `stgrtfstate33edbd1b` cleanly in ~2 min.
+- **Layer 1 apply (laptop):** ~6 min. AKS cluster up, ACR + KV + VNet present. Stays laptop-only (§6.7).
+- **Layer 2 apply (laptop):** ~36 s for the 15 resources. But silently used local state (§6.8) — fixed in iteration by adding the missing backend block and migrating state.
+- **github-setup scripts:** all 3 idempotent runs succeeded first try. `platform-prod` environment created with `iscoct` as required reviewer; 9 repo vars + 1 env-scoped var seeded; branch protection applied (`-RequireChecks` off by default — see §5.9).
+- **app-ci end-to-end:** validated via PR #6 (the fix-trivy-version PR itself). After the fixes in §6.1–§6.3 the full pipeline runs in ~2m28s. Image landed in ACR with both `sha-<sha>` and `main` tags.
+- **infra-plan on PR:** validated via PR #7 then PR #9. After the fixes in §6.5 and §6.6, plan posts cleanly to PR comment.
+- **infra-apply with env gate:** validated via PR #9 merge. Run stayed in `waiting` state until approval via API (`POST /repos/.../actions/runs/<id>/pending_deployments`). After approval, Platform-RW UAMI got its OIDC token, terraform apply succeeded — 4 in-place tag updates (the `owner` tag from the laptop apply's `francisco.cotan` got overwritten with CI's `platform-team`).
+
+**Total elapsed for iteration 2:** ~3.5 hours, of which ~80% was iterating on the 8 pitfalls. The actual happy-path apply once everything was wired correctly was a few minutes end-to-end.
+
+**State at end of iteration 2:**
+- App-ci pipeline: working from `main` pushes. Image current at `acrglobalretaildevweu389ce1.azurecr.io/globalretail/sample-app:main`.
+- Infra workflows: working for Layer 2. Layer 1 is laptop-only (documented in §6.7).
+- Five Dependabot PRs from overnight are still open (failing because they cannot mint OIDC tokens — see Bonus pitfall). Treat as informational: review the diffs, merge from the UI if acceptable. Do not enable them in CI without the Dependabot-aware refactor.
