@@ -99,7 +99,12 @@ jobs:
 
       - name: Terraform plan
         id: plan
-        run: terraform plan -no-color -input=false -out=tfplan
+        # -lock=false: the Platform-RO UAMI has Storage Blob Data Reader, which
+        # cannot write the lock metadata on the tfstate blob. Plan is read-only
+        # by intent — multiple plans can safely run concurrently without a lock.
+        # Apply (in infra-apply.yml) DOES lock, via the Platform-RW UAMI which
+        # has Storage Blob Data Contributor.
+        run: terraform plan -no-color -input=false -lock=false -out=tfplan
         continue-on-error: true
 
       - name: Post plan output to PR
