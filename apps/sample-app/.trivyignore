@@ -20,10 +20,11 @@
 # but the gcr.io/distroless/nodejs20-debian12 image has not yet been
 # rebuilt to incorporate the fix. Track upstream rebuild here:
 #   https://github.com/GoogleContainerTools/distroless/releases
-# Re-check on the expiration date below and remove these lines once the
-# distroless rebuild lands.
-CVE-2026-31789 exp:2026-07-31
-CVE-2026-28387 exp:2026-07-31
-CVE-2026-28388 exp:2026-07-31
-CVE-2026-28389 exp:2026-07-31
-CVE-2026-28390 exp:2026-07-31
+# Re-check quarterly and remove these lines once the distroless rebuild lands.
+# (Trivy `exp:` field tried but the trivy-action SARIF flow doesn't honor it
+# reliably — workaround: no expiration field; track in calendar reminder.)
+CVE-2026-31789
+CVE-2026-28387
+CVE-2026-28388
+CVE-2026-28389
+CVE-2026-28390
