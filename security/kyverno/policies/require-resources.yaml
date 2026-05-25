@@ -48,9 +48,13 @@ spec:
                 - kyverno
                 - gatekeeper-system
       validate:
-        message: 'Container "{{element.name}}" is missing CPU/memory requests or limits.'
         foreach:
           - list: 'request.object.spec.containers'
+            # `message` lives INSIDE the foreach because it references
+            # `element.name`, which is only defined inside the loop.
+            # Putting it at the validate level (where many tutorials show
+            # it) makes Kyverno reject the policy at admission:
+            #   'element.name' present outside of foreach at path /validate/message
             deny:
               conditions:
                 any:
