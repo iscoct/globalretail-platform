@@ -1,0 +1,36 @@
+# sample-app Application.
+#
+# Created by ArgoCD when it reconciles the `root` Application (which scans
+# this folder). Points at the kustomized manifest under
+# gitops/workloads/sample-app/overlays/dev — the kustomize materialises a
+# Deployment + Service + Namespace, with the ACR-prefixed image override.
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: sample-app
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/iscoct/globalretail-platform
+    targetRevision: main
+    path: gitops/workloads/sample-app/overlays/dev
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: sample-app
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      # The first sync needs to create the `sample-app` namespace itself
+      # (it's defined in the base kustomize too, but CreateNamespace=true
+      # lets ArgoCD create it before applying namespaced resources).
+      - CreateNamespace=true
+      - ApplyOutOfSyncOnly=true
