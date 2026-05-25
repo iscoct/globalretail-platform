@@ -1,0 +1,61 @@
+# Observability stack — kube-prometheus-stack + our custom resources.
+#
+# Multi-source Application. Three sources combined into one Application:
+#
+#   1. The upstream Helm chart (prometheus-community/kube-prometheus-stack)
+#   2. Our git repo, attached as $values so the chart reads its values.yaml
+#      from the repo at ../../observability/kube-prometheus-stack/values.yaml.
+#   3. Our git repo, with `path:` set to the custom-resource kustomize bundle
+#      (ServiceMonitor, PrometheusRule, dashboard ConfigMap).
+#
+# ArgoCD renders all three together and applies as one Application. Adding
+# a fourth source (e.g., loki via helm) is an incremental change to this file.
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: observability
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  sources:
+    # --- Source 1: kube-prometheus-stack chart from upstream ----------------
+    - repoURL: https://prometheus-community.github.io/helm-charts
+      chart: kube-prometheus-stack
+      targetRevision: 85.3.3
+      helm:
+        # `$values` is a special ArgoCD reference: it points at source 2
+        # below. The chart's value overrides come from our repo.
+        valueFiles:
+          - $values/observability/kube-prometheus-stack/values.yaml
+        releaseName: kube-prometheus-stack
+
+    # --- Source 2: our repo as a values reference --------------------------
+    - repoURL: https://github.com/iscoct/globalretail-platform
+      targetRevision: main
+      ref: values
+
+    # --- Source 3: our custom resources (kustomize) -------------------------
+    - repoURL: https://github.com/iscoct/globalretail-platform
+      targetRevision: main
+      path: observability/manifests
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ApplyOutOfSyncOnly=true
+      # ServerSideApply avoids the "metadata.annotations too long" error
+      # that kube-prometheus-stack's CRDs trigger on client-side apply.
+      # The default for ArgoCD 2.x+; we set it explicitly so the failure
+      # mode is documented for anyone reading the YAML.
+      - ServerSideApply=true
