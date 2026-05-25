@@ -15,7 +15,9 @@ on:
   pull_request:
     branches: [main]
     paths:
-      - 'infra/**'
+      # `infra/**` is intentionally NOT listed. Layer 1 plan/apply runs from
+      # a laptop until the azuread refactor is done — CI cannot resolve the
+      # admin-group owners/members reference correctly. See cicd/README.md §6.
       - 'cicd/terraform/**'
       - '.github/workflows/infra-plan.yml'
   workflow_dispatch:
@@ -40,8 +42,15 @@ jobs:
       fail-fast: false
       matrix:
         layer:
-          - { name: layer1-infra,        dir: infra,           backend_key: infra/dev/terraform.tfstate }
-          - { name: layer2-cicd,         dir: cicd/terraform,  backend_key: cicd/dev/terraform.tfstate }
+          # NOTE: layer1-infra deliberately NOT in CI plan/apply matrix.
+          # Layer 1 uses `data.azurerm_client_config.current.object_id` for
+          # the AKS admin group's owners/members. When CI runs, that resolves
+          # to the Platform-RO/RW UAMI's object ID rather than the human
+          # operator's, so plan reports a phantom "update group owners" diff
+          # that the UAMI cannot apply (no Entra ID Directory write). Until
+          # Layer 1 takes the admin user's object_id as a variable, Layer 1
+          # plan/apply stays laptop-only. See cicd/README.md §6.
+          - { name: layer2-cicd, dir: cicd/terraform, backend_key: cicd/dev/terraform.tfstate }
     defaults:
       run:
         working-directory: ${{ matrix.layer.dir }}
