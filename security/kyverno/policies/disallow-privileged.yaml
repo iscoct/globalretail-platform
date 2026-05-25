@@ -45,9 +45,9 @@ spec:
                 # hostPath. Excluded from the policy.
                 - kube-secrets-store-csi-driver
       validate:
-        message: 'Container "{{element.name}}" requests privileged or allowPrivilegeEscalation.'
         foreach:
           - list: 'request.object.spec.containers'
+            # message lives in foreach (see require-resources.yaml comment).
             deny:
               conditions:
                 any:
