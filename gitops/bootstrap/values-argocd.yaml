@@ -3,10 +3,13 @@
 # Lab-shaped install: single instance, no HA, no public exposure. Production
 # differences are listed in ../README.md §4 (Lab vs Production).
 
-global:
-  # Use the chart's bundled default image tags. Pinning a specific app version
-  # is a production move; for the lab we accept whatever the chart's stable
-  # ships.
+# NOTE: we deliberately do NOT override `global:` here. The chart since
+# ~v8.0 requires `global.image.tag` (or the chart's appVersion default) to
+# render the labels template; supplying an empty `global:` block whose
+# subkeys we do NOT set causes a nil-pointer template error. Letting the
+# chart's own defaults take over is the safe path for a lab. Production
+# would pin both the chart version (--version) and the app version
+# (global.image.tag).
 
 # --- argocd-server (UI + API) -----------------------------------------------
 server:
