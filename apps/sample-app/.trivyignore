@@ -1,0 +1,29 @@
+# Trivy CVE suppressions.
+#
+# Production teams that scan images CANNOT avoid this file. Upstream base
+# images often have known CVEs whose fixes are merged into the distro's
+# next release but haven't been rebuilt into the base image yet. We are
+# stuck waiting on the upstream rebuild — there is no patch we can apply
+# in our Dockerfile.
+#
+# Rules of the game (real production teams follow these):
+#   1. Every entry has an EXPIRATION date (`exp:`). Trivy fails the build
+#      again when that date passes, forcing you to revisit instead of
+#      letting an ignore rule rot forever.
+#   2. Each entry has a Why: comment explaining the upstream context.
+#   3. NEVER add MEDIUM/LOW CVEs to this file. The threshold is HIGH+.
+#   4. Reviewed every quarter (mark in calendar).
+#
+# Current entries:
+
+# Debian 12's libssl3 0.3.0.18 → 0.3.0.19 was released by upstream Debian
+# but the gcr.io/distroless/nodejs20-debian12 image has not yet been
+# rebuilt to incorporate the fix. Track upstream rebuild here:
+#   https://github.com/GoogleContainerTools/distroless/releases
+# Re-check on the expiration date below and remove these lines once the
+# distroless rebuild lands.
+CVE-2026-31789 exp:2026-07-31
+CVE-2026-28387 exp:2026-07-31
+CVE-2026-28388 exp:2026-07-31
+CVE-2026-28389 exp:2026-07-31
+CVE-2026-28390 exp:2026-07-31

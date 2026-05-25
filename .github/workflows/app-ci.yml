@@ -185,6 +185,7 @@ jobs:
           severity: HIGH,CRITICAL
           exit-code: '1'
           ignore-unfixed: true
+          trivyignores: ${{ env.APP_DIR }}/.trivyignore
 
       - name: Upload Trivy results to GitHub Security tab
         if: always()
