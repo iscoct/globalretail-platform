@@ -86,7 +86,7 @@ Each layer has its own `README.md` answering eight questions (what it does, why 
 |---|-------|--------|--------|
 | 1 | Platform foundation (Terraform) | `infra/`  | ✅ Built + tested + teardown verified |
 | 2 | CI/CD with OIDC (GitHub Actions → Azure) | `cicd/` | 🚧 Code drafted, end-to-end test pending |
-| 3 | GitOps delivery (ArgoCD) | `gitops/` | ⏳ Not started |
+| 3 | GitOps delivery (ArgoCD) | `gitops/` | ✅ Built + tested end-to-end (sample-app reconciled via app-of-apps) |
 | 4 | Observability (Prometheus, Grafana, Azure Monitor) | `observability/` | ⏳ Not started |
 | 5 | Security (Kyverno, Trivy, Workload Identity, Key Vault CSI) | `security/` | ⏳ Not started |
 
