@@ -1,0 +1,65 @@
+# ArgoCD Helm values (argo/argo-cd chart).
+#
+# Lab-shaped install: single instance, no HA, no public exposure. Production
+# differences are listed in ../README.md §4 (Lab vs Production).
+
+global:
+  # Use the chart's bundled default image tags. Pinning a specific app version
+  # is a production move; for the lab we accept whatever the chart's stable
+  # ships.
+
+# --- argocd-server (UI + API) -----------------------------------------------
+server:
+  # ClusterIP, not LoadBalancer. Reasons:
+  #   - A public IP costs money (small but real).
+  #   - Exposing the ArgoCD admin UI on the internet on day one is a security
+  #     anti-pattern. Operators access the UI via `kubectl port-forward` from
+  #     a workstation that already has AKS API access.
+  # Production: LoadBalancer behind a WAF, with OIDC/SSO auth (Dex or the
+  # native OIDC config), TLS via cert-manager + Let's Encrypt.
+  service:
+    type: ClusterIP
+
+# --- argocd-application-controller (sync engine) ----------------------------
+controller:
+  # One controller replica is fine for a lab cluster with a handful of apps.
+  # Production: 2+ replicas for HA, partitioned by app shard if you have
+  # hundreds of Applications.
+  replicas: 1
+
+# --- argocd-repo-server (the thing that materialises Kustomize/Helm) --------
+repoServer:
+  replicas: 1
+
+# --- redis (job queue + cache) ----------------------------------------------
+redis-ha:
+  enabled: false   # single-instance redis is enough for the lab
+
+redis:
+  enabled: true
+
+# --- argocd-dex-server (SSO gateway, OFF for the lab) -----------------------
+# We use the built-in admin user + local password for the lab. Production:
+# enable dex with Entra ID / GitHub / Google as the upstream IdP. The admin
+# user gets disabled the moment SSO works.
+dex:
+  enabled: false
+
+# --- configs.params: ArgoCD config map equivalents --------------------------
+configs:
+  params:
+    # Insecure mode strips TLS from the argocd-server pod. We do this because
+    # `kubectl port-forward` reaches the pod on plain HTTP and TLS would
+    # require accepting a self-signed cert on every port-forward session.
+    # Production: leave TLS on; terminate at an ingress with a real cert.
+    server.insecure: true
+
+  # cm: argocd-cm overrides
+  cm:
+    # Allow Applications managed by ArgoCD to live in non-`argocd` namespaces
+    # if we ever scale to multi-tenant. Off by default (apps in `argocd`).
+    application.instanceLabelKey: argocd.argoproj.io/instance
+
+# --- notifications (off for the lab) ----------------------------------------
+notifications:
+  enabled: false

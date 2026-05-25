@@ -1,0 +1,46 @@
+# The "app-of-apps" Application.
+#
+# This is the seed: a single Application managed by ArgoCD that POINTS AT a
+# folder full of more Applications. When you commit a new Application file
+# into `gitops/applications/`, ArgoCD picks it up on the next sync of `root`
+# and starts managing it. Adding a workload to the cluster becomes "add a
+# YAML file to that folder" — no kubectl needed.
+#
+# This is applied ONCE by bootstrap/install-argocd.ps1. From that point on,
+# ArgoCD reconciles everything else.
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: root
+  namespace: argocd
+  finalizers:
+    # When the Application itself is deleted, ArgoCD walks the tree and
+    # removes the resources it owns. Without this finalizer, deleting the
+    # Application leaves orphans behind. The finalizer is the canonical
+    # safety net.
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/iscoct/globalretail-platform
+    targetRevision: main
+    path: gitops/applications
+    directory:
+      recurse: false
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+
+  syncPolicy:
+    automated:
+      # Prune resources that were removed from git.
+      prune: true
+      # Self-heal: re-apply if someone mutates the cluster out of band
+      # (the canonical "no kubectl edit" enforcement).
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=false   # the argocd namespace already exists
+      - ApplyOutOfSyncOnly=true # only touch resources that differ
