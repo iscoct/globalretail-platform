@@ -27,7 +27,8 @@ on:
   push:
     branches: [main]
     paths:
-      - 'infra/**'
+      # `infra/**` intentionally absent — Layer 1 apply runs from a laptop
+      # until refactor. See cicd/README.md §6.
       - 'cicd/terraform/**'
       - '.github/workflows/infra-apply.yml'
   workflow_dispatch:
@@ -53,11 +54,14 @@ jobs:
     environment: platform-prod
     strategy:
       fail-fast: true
-      max-parallel: 1   # apply layers sequentially, layer 1 → layer 2
+      max-parallel: 1
       matrix:
         layer:
-          - { name: layer1-infra,        dir: infra,           backend_key: infra/dev/terraform.tfstate, order: 1 }
-          - { name: layer2-cicd,         dir: cicd/terraform,  backend_key: cicd/dev/terraform.tfstate,  order: 2 }
+          # See infra-plan.yml for why layer1-infra is NOT in the CI matrix.
+          # tl;dr: Layer 1's azuread_group uses dynamic client-config
+          # references that resolve to the UAMI under CI, producing a phantom
+          # diff the UAMI cannot apply. Layer 1 stays laptop-only.
+          - { name: layer2-cicd, dir: cicd/terraform, backend_key: cicd/dev/terraform.tfstate, order: 1 }
     defaults:
       run:
         working-directory: ${{ matrix.layer.dir }}
