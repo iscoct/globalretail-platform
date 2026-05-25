@@ -13,7 +13,8 @@
     "audit:ci": "npm audit --audit-level=high --omit=dev"
   },
   "dependencies": {
-    "express": "4.22.2"
+    "express": "4.22.2",
+    "prom-client": "15.1.3"
   },
   "devDependencies": {
     "jest": "29.7.0",
