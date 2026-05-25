@@ -1,0 +1,12 @@
+# Bundles the four ClusterPolicies into a single kustomize tree so that the
+# ArgoCD Application can point at this folder. Adding a new policy = add
+# the file + add a resource line here.
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - require-resources.yaml
+  - disallow-latest-tag.yaml
+  - disallow-privileged.yaml
+  - require-runasnonroot.yaml

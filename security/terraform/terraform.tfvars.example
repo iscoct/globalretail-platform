@@ -1,0 +1,27 @@
+# Copy to terraform.tfvars (gitignored) and fill in YOUR values.
+#
+# Then:
+#   terraform init -backend-config=backend.hcl
+#   terraform plan
+#   terraform apply
+
+# --- Required (no defaults) -------------------------------------------------
+subscription_id = ""   # az account show --query id -o tsv
+tenant_id       = ""   # az account show --query tenantId -o tsv
+
+# Look up in ../../infra/backend.hcl after Layer 1 bootstrap. Each fork
+# has its own SA name (random suffix), so this can't have a default.
+layer1_tfstate_storage_account = ""
+
+# --- Optional (defaults are sensible for the lab) ---------------------------
+# workload       = "globalretail"
+# environment    = "dev"
+# location       = "westeurope"
+# location_short = "weu"
+# owner          = "platform-team"
+#
+# sample_app_namespace       = "sample-app"
+# sample_app_service_account = "sample-app"
+#
+# welcome_message_secret_name  = "sample-app-welcome-message"
+# welcome_message_secret_value = "hello-from-key-vault-via-workload-identity"

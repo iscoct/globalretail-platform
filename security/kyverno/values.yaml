@@ -1,0 +1,56 @@
+# Kyverno Helm chart values (kyverno/kyverno chart).
+#
+# Lab-shaped. Production overrides documented in ../README.md §4.
+
+# --- Replicas + resources ---------------------------------------------------
+admissionController:
+  # Single replica — lab. Production runs 2-3 for HA so an outage of one
+  # admission controller pod doesn't block ALL admission webhooks
+  # cluster-wide (when the webhook is down, Kubernetes returns 5xx on every
+  # CREATE/UPDATE in scope, which is most of them).
+  replicas: 1
+
+  resources:
+    requests:
+      memory: 128Mi
+      cpu: 50m
+    limits:
+      memory: 384Mi
+      cpu: 500m
+
+backgroundController:
+  replicas: 1
+
+cleanupController:
+  replicas: 1
+
+reportsController:
+  replicas: 1
+
+# --- Webhook failure policy -------------------------------------------------
+# `Fail` means: if the Kyverno admission webhook is down, deny all CREATE
+# requests in its scope. This is the SAFE production posture (no
+# unpoliced workloads slip through) but DANGEROUS during install if you
+# don't have an out — if Kyverno crashes, the cluster stops accepting
+# new pods even from the chart itself.
+#
+# `Ignore` means: webhook down → admission proceeds without policy check.
+# The PRAGMATIC default for a lab where the cluster comes first and
+# enforcement is a bonus.
+#
+# Most production teams: Ignore on install, switch to Fail once enforcement
+# is stable. We start with Ignore here.
+config:
+  webhooks:
+    - failurePolicy: Ignore
+      timeoutSeconds: 10
+      namespaceSelector:
+        # Exclude system namespaces — never block kube-system traffic.
+        matchExpressions:
+          - key: kubernetes.io/metadata.name
+            operator: NotIn
+            values:
+              - kube-system
+              - kube-public
+              - kube-node-lease
+              - kyverno
