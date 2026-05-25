@@ -97,11 +97,11 @@ jobs:
           tenant_id       = "${{ vars.AZURE_TENANT_ID }}"
           owner           = "${{ vars.OWNER_TAG }}"
           EOF
-          if [ "${{ matrix.layer.dir }}" = "infra" ]; then
-            # CI cannot create Entra ID groups (no tenant permissions). The
-            # bootstrap step creates the group; CI must NOT try to manage it.
-            echo 'create_aks_admin_group = false' >> terraform.tfvars
-          fi
+          # NOTE: `create_aks_admin_group` keeps its default of `true` here.
+          # The group was created by the laptop apply and is in the state.
+          # We pass `-refresh=false` below so the CI UAMIs (which lack Entra
+          # ID directory permissions) never try to read the group via the
+          # azuread provider — the state's last-known values are used as-is.
           if [ "${{ matrix.layer.dir }}" = "cicd/terraform" ]; then
             cat >> terraform.tfvars <<EOF
           layer1_tfstate_storage_account = "${{ vars.TFSTATE_STORAGE_ACCOUNT }}"
@@ -117,7 +117,11 @@ jobs:
         run: terraform validate
 
       - name: Terraform plan (out=tfplan)
-        run: terraform plan -input=false -out=tfplan
+        # -refresh=false: CI UAMIs have Azure RBAC, NOT Entra ID directory
+        # permissions. Any `azuread_*` resource in state would 403 during
+        # refresh. Plan uses last known state values; drift detection is the
+        # laptop's job, not CI's.
+        run: terraform plan -input=false -refresh=false -out=tfplan
 
       - name: Terraform apply
         run: terraform apply -input=false -auto-approve tfplan

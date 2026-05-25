@@ -99,12 +99,16 @@ jobs:
 
       - name: Terraform plan
         id: plan
-        # -lock=false: the Platform-RO UAMI has Storage Blob Data Reader, which
-        # cannot write the lock metadata on the tfstate blob. Plan is read-only
-        # by intent — multiple plans can safely run concurrently without a lock.
-        # Apply (in infra-apply.yml) DOES lock, via the Platform-RW UAMI which
-        # has Storage Blob Data Contributor.
-        run: terraform plan -no-color -input=false -lock=false -out=tfplan
+        # -lock=false   : Platform-RO UAMI has Storage Blob Data Reader (cannot
+        #                 write the tfstate lock blob's metadata). Plan is
+        #                 read-only by intent — concurrent plans are safe.
+        # -refresh=false: the CI UAMIs have Azure RBAC permissions, NOT Entra
+        #                 ID directory permissions. Any `azuread_*` resource
+        #                 in state would 403 during refresh. Trade-off: PR
+        #                 plan output is based on last known state, not live
+        #                 Azure state. Drift between Azure and tfstate is not
+        #                 detected by CI — only by a laptop-run plan.
+        run: terraform plan -no-color -input=false -lock=false -refresh=false -out=tfplan
         continue-on-error: true
 
       - name: Post plan output to PR
