@@ -197,7 +197,24 @@ Production teams audit cardinality with `topk(20, count by (__name__) ({__name__
 
 ## 6. Pitfalls and gotchas
 
-`[TBD-AFTER-BUILD]` — filled in after the first end-to-end test reveals what breaks.
+Three things to know after the 2026-05-25 end-to-end run.
+
+### 6.1 kube-prometheus-stack forced a node autoscale (predicted cost, manifested concretely)
+**Symptom:** After ArgoCD synced the observability Application, a routine `kubectl rollout restart deployment/sample-app -n sample-app` timed out with "1 out of 2 new replicas have been updated". The new pod was in `Pending` for ~2 minutes.
+**Cause:** The stack consumes ~1 vCPU + ~1 GiB across its 6 pods on the user node pool. With our `D2s_v3` nodes (2 vCPU, 8 GiB) and the user pool autoscaled to 1 node, the new sample-app pod couldn't schedule — it triggered AKS Cluster Autoscaler to spin up a second node. The pod sat `Pending` until that node was Ready (~90s on the warm path).
+**Fix:** None needed — the autoscaler did its job. But the **practical implication** is real: with kube-prometheus-stack on, the cluster's steady-state floor is ~2 nodes, not 1. That's $$ while it's up. Stop the stack (`kubectl delete app observability -n argocd`) and the user pool will scale back down within ~10 minutes (default autoscaler scale-down delay).
+**Lesson:** monitoring is not free even on a tiny cluster. The "absorb the cost" decision in Layer 4's planning conversation was correct; just calibrate the expectation.
+
+### 6.2 The mutable `:main` tag + the GitOps reconciler don't roll deployments by themselves
+**Symptom:** After PR #14 merged and `app-ci` pushed a new `:main` image with the `/metrics` endpoint, the running sample-app pods continued to serve the old image (no `/metrics`). The Application was `Synced + Healthy` — ArgoCD saw no diff in git, the manifest was identical.
+**Cause:** This is the canonical mutable-tag problem flagged in Layer 3's §5.6 (Mutable vs immutable image tags). The manifest's `image: …/sample-app:main` did not change because `main` is the same tag; ArgoCD reconciled to "no change"; existing pods kept serving the old image because they had already pulled the old digest and nothing triggered a re-pull.
+**Fix:** `kubectl rollout restart deployment/sample-app -n sample-app`. The new ReplicaSet's pods do an `Always` pull and get the new digest. This is acceptable as a lab pattern, but the **production-correct path** stays as described in Layer 3 §5.6: app-ci opens an auto-PR that updates `gitops/workloads/sample-app/overlays/dev/kustomization.yaml` with the new SHA tag, ArgoCD then sees a real diff and rolls automatically with full audit.
+**Lesson:** Layer 4 surfaced the cost of Layer 3's mutable-tag shortcut. The first time the instructor pushes a new app version after deploying observability, they will see this — and that's the *teaching* moment for "why immutable tags + auto-PR matter".
+
+### 6.3 Old pod endpoints linger in `up{job=...}` after pod termination (informational)
+**Observation:** Querying `up{job="sample-app"}` while the sample-app rollout was in flight returned **four** results — two old pods showing `up=0` (just terminated) and two new pods showing `up=1`. The old entries hung around for one full scrape cycle (~30s) before Prometheus dropped them.
+**Cause:** Prometheus discovers targets from the kubelet's endpoint list at scrape time; between discovery and the next scrape, a recently-terminated endpoint is still in the list with `up=0`. Not a bug; not a problem; worth knowing so you don't panic when half your fleet looks "down" during a rollout.
+**Fix:** None. If you're computing alerts on `up == 0`, give them a `for: 5m` to avoid the rollout false-positive — which is what we do in the `SampleAppMetricsScrapeMissing` alert via `absent(...)` + `for: 5m`.
 
 ## 7. Likely student questions and answers
 
@@ -260,10 +277,33 @@ A: Same reason as the ServiceMonitor: it belongs WITH the workload. The team tha
 
 ## Build progress
 
-- [x] Iteration 1: code drafted (helm values, ServiceMonitor, PrometheusRule, dashboard ConfigMap, multi-source Application)
-- [ ] Iteration 2: end-to-end test (ArgoCD reconciles stack, Prometheus scrapes sample-app, Grafana dashboard renders, alerts evaluate)
-- [ ] §6 Pitfalls filled with real incidents
+- [x] Iteration 1: sample-app `/metrics` instrumentation (PR #14, prom-client)
+- [x] Iteration 2: observability/ code drafted — helm values, ServiceMonitor, PrometheusRule, dashboard ConfigMap, multi-source Application
+- [x] Iteration 3: end-to-end test — 3 Applications Synced + Healthy, Prometheus scrapes sample-app `/metrics`, custom metrics queryable, Grafana auto-loaded the GlobalRetail dashboard
+- [x] §6 Pitfalls filled (3)
+- [ ] Iteration 4: teardown verified
+- [ ] Demo prepared for class
+- [ ] Future: Layer 4b — Azure Managed Prometheus + Managed Grafana
 
 ## Iteration log
 
-`[TBD-AFTER-BUILD]` — appended after each iteration.
+### Iteration 1 — sample-app `/metrics` (2026-05-25)
+Added `prom-client@15.1.3` to `apps/sample-app/`. Wired default process metrics (CPU, heap, GC, event-loop lag) + custom `http_request_duration_seconds` histogram + `health_checks_total` counter + a `/metrics` route in Express format. Four new tests (7 total, 100% statements). PR #14 merged; `app-ci` built and pushed the new image to ACR.
+
+### Iteration 2 — observability/ code drafted (2026-05-25)
+Wrote the multi-source ArgoCD Application (kube-prometheus-stack@85.3.3 + this repo as `$values` + this repo for the kustomize bundle). Wrote ServiceMonitor (scrape sample-app `:80/metrics` every 30s), PrometheusRule (3 recording rules + 2 burn-rate alerts + 1 scrape-missing meta-alert), and a 6-panel Grafana dashboard delivered as a labelled ConfigMap. Sub-README §1–§5, §7, §8.
+
+### Iteration 3 — end-to-end test (2026-05-25)
+- PR #15 merged. ArgoCD's `root` Application discovered `gitops/applications/observability.yaml` within ~30 s of the merge.
+- The `observability` Application converged Synced + Healthy in ~2 min. 6 pods in `monitoring` namespace: prometheus-operator, prometheus, alertmanager, grafana (with 2 sidecars), kube-state-metrics, node-exporter DaemonSet on each node.
+- The user node pool autoscaled from 1 → 2 nodes during the install (pitfall §6.1). Auto-recovery, no human intervention.
+- After `kubectl rollout restart deployment/sample-app` (pitfall §6.2), the new `/metrics`-aware image rolled out, Prometheus discovered the endpoints, and `health_checks_total{app="globalretail-sample-app"} = 4` was queryable in Prometheus within ~30 s of the rollout completing.
+- Grafana auto-loaded the `GlobalRetail sample-app` dashboard via the sidecar (verified by `GET /api/search?query=GlobalRetail` against the Grafana API).
+- Burn-rate alerts not yet observable in firing state — they need real traffic to /health AND latency variation that the lab isn't generating. Future iteration could add a load generator to demonstrate alerts firing.
+
+**State at end of iteration 3:**
+- AKS user pool: 2 nodes Ready.
+- ArgoCD: 3 Applications, all Healthy (`root`, `sample-app`, `observability`).
+- Prometheus: scraping ~700 series including the sample-app custom metrics + the standard kube-state-metrics + node-exporter set.
+- Grafana: GlobalRetail dashboard loaded; access via `kubectl port-forward svc/kube-prometheus-stack-grafana -n monitoring 3000:80`, login `admin / prom-operator`.
+- Alertmanager: routing configured, null receiver, no alerts firing.
