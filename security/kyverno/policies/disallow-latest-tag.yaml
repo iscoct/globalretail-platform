@@ -1,0 +1,55 @@
+# Pods MUST NOT use `:latest` (or no tag = same thing).
+#
+# Why: `:latest` is mutable and undefined. A pod that restarts can pull a
+# different digest than its sibling pods. Rollbacks become "which latest
+# did we have last week?". This is the entire reason we use SHA tags in
+# Layer 2's pipeline and document the auto-PR pattern in Layer 3 §5.6.
+#
+# This policy enforces at admission what the CI pipeline already enforces
+# in convention. Defense in depth.
+
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: disallow-latest-tag
+  annotations:
+    policies.kyverno.io/title: 'Disallow image tag :latest'
+    policies.kyverno.io/category: 'Best Practices'
+    policies.kyverno.io/severity: 'medium'
+    policies.kyverno.io/subject: 'Pod'
+    policies.kyverno.io/description: |
+      Validates that pod container images do not use the `:latest` tag
+      and are not tagless. Both are mutable references and prevent
+      reproducible deployments.
+spec:
+  validationFailureAction: Audit
+  background: true
+  rules:
+    - name: require-image-tag
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+      exclude:
+        any:
+          - resources:
+              namespaces:
+                - kube-system
+                - kube-public
+                - kube-node-lease
+                - kyverno
+      validate:
+        message: 'Container "{{element.name}}" uses a tagless or :latest image — pin a SHA or a semver tag.'
+        foreach:
+          - list: 'request.object.spec.containers'
+            deny:
+              conditions:
+                any:
+                  # ends in :latest
+                  - key: '{{ element.image }}'
+                    operator: Equals
+                    value: '*:latest'
+                  # no `:` at all = no tag
+                  - key: '{{ contains(element.image, '':'') }}'
+                    operator: Equals
+                    value: false

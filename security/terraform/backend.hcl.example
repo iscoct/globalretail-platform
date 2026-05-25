@@ -1,0 +1,10 @@
+# Copy to backend.hcl and fill in storage_account_name (from ../../infra/backend.hcl).
+# Consumed by: terraform init -backend-config=backend.hcl
+
+resource_group_name  = "rg-tfstate-globalretail-weu"
+storage_account_name = ""                              # copy from ../../infra/backend.hcl
+container_name       = "tfstate"
+key                  = "security/dev/terraform.tfstate"
+use_azuread_auth     = true
+subscription_id      = ""                              # az account show --query id -o tsv
+tenant_id            = ""                              # az account show --query tenantId -o tsv
