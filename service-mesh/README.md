@@ -1,6 +1,6 @@
 # Layer 6 — Service Mesh (Istio Ambient)
 
-> 🚧 **Status:** code drafted, end-to-end test pending. §6 Pitfalls is `[TBD-AFTER-BUILD]` and gets filled in once the layer is deployed.
+> ✅ **Status:** built + tested end-to-end (2026-05-26). Canary 90/10 split verified via in-mesh curl-client. Cross-app zero-trust posture verified (mesh-test SA denied, sample-app SA allowed). Prometheus + ama-metrics scrapes both apps in Ambient mode.
 
 ---
 

@@ -94,7 +94,7 @@ Each layer has its own `README.md` answering eight questions (what it does, why 
 | 4b | Observability — Azure-managed (Monitor Workspace + Managed Grafana) | `observability/azure-managed/` | ✅ Built + tested in parallel (same `/metrics`, two backends, two UIs) |
 | 5 | Security (Kyverno + CSI Secrets Store + Workload Identity) | `security/` | ✅ Built + tested end-to-end (sample-app `/version` reads a Key Vault secret via Workload Identity) |
 | — | **Second workload: `inventory-api` (Go)** | `apps/inventory-api/` | ✅ Built + tested — same CI/CD, GitOps, observability, Kyverno policies as `sample-app`, in a different language. Both backends see identical metric values. |
-| 6 | Service mesh (Istio Ambient + Kiali + canary demo) | `service-mesh/` | 🚧 Code drafted, end-to-end test pending |
+| 6 | Service mesh (Istio Ambient + Kiali + canary demo) | `service-mesh/` | ✅ Built + tested end-to-end (canary 90/10 split visible via in-mesh curl-client, cross-app zero-trust posture verified) |
 
 ## How to deploy this in your own Azure subscription
 
