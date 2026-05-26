@@ -1,0 +1,54 @@
+# Kiali Helm chart values.
+#
+# Kiali is the observability UI for Istio: service graph, traffic flows,
+# request rates per edge, mTLS status per connection, AuthorizationPolicy
+# inspection. Reads its data from Prometheus (istio_* metrics emitted by
+# ztunnel + waypoint proxies).
+
+# --- Authentication ---------------------------------------------------------
+# `anonymous` is a lab convenience — anyone who can port-forward the kiali
+# Service gets admin access. In production you switch to `openid` (OIDC
+# against Entra ID, GitHub, etc.) or `token` (K8s SA token bearer auth).
+auth:
+  strategy: anonymous
+
+# --- Where Kiali finds its data sources ------------------------------------
+external_services:
+  prometheus:
+    # The in-cluster Prometheus from Layer 4. Kiali queries istio_* metrics
+    # from here. Note: this is the SAME Prometheus that scrapes our app
+    # /metrics endpoints — we are NOT running a separate Istio-only Prom.
+    url: 'http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090'
+  grafana:
+    # Optional — when set, Kiali "View in Grafana" links work. The Grafana
+    # password is `prom-operator` (set in Layer 4 values).
+    enabled: true
+    in_cluster_url: 'http://kube-prometheus-stack-grafana.monitoring.svc.cluster.local'
+    external_url: 'http://localhost:3000'   # for users who port-forward
+  tracing:
+    # No tracing backend installed yet — keeping the flag here as a marker
+    # for the future Layer 7 (tracing). Kiali tolerates the missing
+    # endpoint and just hides the trace-related panels.
+    enabled: false
+
+# --- Resources -------------------------------------------------------------
+deployment:
+  # Kiali consumes ~150Mi to render the graph for our small mesh; bump for
+  # production where there are dozens of services and waypoints.
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  # Single replica is fine for dev — Kiali is a read-only UI, no state.
+  replicas: 1
+
+# --- Server / istio integration --------------------------------------------
+server:
+  # The web root path; the default /kiali is fine and matches the upstream
+  # docs / port-forward instructions.
+  web_root: /kiali
+
+istio_namespace: istio-system

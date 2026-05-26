@@ -1,0 +1,22 @@
+# PeerAuthentication — mesh-wide STRICT mTLS.
+#
+# In Ambient mode, ztunnel automatically does mTLS between any two
+# Ambient-enrolled pods. By default it negotiates mTLS but accepts plaintext
+# from non-mesh peers (PERMISSIVE-equivalent).
+#
+# Declaring a PeerAuthentication in `istio-system` with no selector applies
+# it to the entire mesh — STRICT means "reject any plaintext peer". Pods
+# OUTSIDE the mesh (monitoring/prometheus, argocd controller) can no longer
+# connect unless they too are in the mesh, OR an AuthorizationPolicy allows
+# them by source identity.
+#
+# This is the standard "zero-trust default": no encryption-less connections.
+
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: default
+  namespace: istio-system
+spec:
+  mtls:
+    mode: STRICT

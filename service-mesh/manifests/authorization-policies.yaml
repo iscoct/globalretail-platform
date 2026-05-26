@@ -1,0 +1,164 @@
+# AuthorizationPolicy — zero-trust authorization between mesh pods.
+#
+# In Ambient mode, ztunnel enforces L4 AuthorizationPolicy (deny/allow by
+# source identity + destination port). L7 AuthZ (path, method, host) needs
+# a Waypoint proxy — see service-mesh/manifests/canary/waypoint.yaml.
+#
+# Pattern: "default deny + explicit allows". For each namespace in the mesh,
+# we declare:
+#   1. A deny-all policy (no rules → empty allow list → reject everything).
+#   2. An explicit allow for the Prometheus scraper (Layer 4) on the metrics
+#      port — otherwise dashboards and SLO alerts go dark.
+#   3. The cross-app allow we need for the demo (sample-app SA can talk to
+#      inventory-api).
+#
+# Mesh-external traffic identity: Prometheus is NOT in the mesh (monitoring
+# namespace not labeled Ambient). ztunnel still identifies it by source IP
+# → pod → namespace mapping. We allow `from.namespaces: [monitoring]`
+# (NOT a principal, since the source has no SPIFFE identity).
+
+# ===== sample-app namespace =====
+
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: default-deny
+  namespace: sample-app
+spec:
+  # Empty `rules:` means "deny everything"; `action: ALLOW` (the default)
+  # with no rules has the same effect as DENY with `rules: [*]`. The doc
+  # idiom is action ALLOW + no rules.
+  {}
+
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-prometheus-scrape
+  namespace: sample-app
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: sample-app
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            namespaces: ["monitoring"]
+      to:
+        - operation:
+            ports: ["3000"]
+            paths: ["/metrics"]
+
+---
+# Allow ALL traffic to sample-app pods on port 3000. This is the dev cluster
+# convenience policy that makes `kubectl port-forward` + curl work end-to-end
+# from your laptop. In production this would be tightened to specific source
+# namespaces (ingress controller) or removed entirely once an Istio Gateway
+# fronts the workload.
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-port-forward
+  namespace: sample-app
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: sample-app
+  action: ALLOW
+  rules:
+    - to:
+        - operation:
+            ports: ["3000"]
+
+# ===== inventory-api namespace =====
+
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: default-deny
+  namespace: inventory-api
+spec: {}
+
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-prometheus-scrape
+  namespace: inventory-api
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: inventory-api
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            namespaces: ["monitoring"]
+      to:
+        - operation:
+            ports: ["8080"]
+            paths: ["/metrics"]
+
+---
+# The cross-app allow: sample-app's ServiceAccount can talk to inventory-api.
+# Identity comes from SPIFFE: the source principal is
+# `cluster.local/ns/sample-app/sa/sample-app`. ztunnel verifies the mTLS cert
+# and matches its SPIFFE SAN against this policy.
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-sample-app-to-inventory
+  namespace: inventory-api
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: inventory-api
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/sample-app/sa/sample-app
+      to:
+        - operation:
+            ports: ["8080"]
+
+---
+# Allow port-forward / external curl for the lab.
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-port-forward
+  namespace: inventory-api
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: inventory-api
+  action: ALLOW
+  rules:
+    - to:
+        - operation:
+            ports: ["8080"]
+
+---
+# Allow the in-mesh curl client (mesh-test namespace) to call sample-app and
+# inventory-api. This is what drives the canary demo traffic — see the
+# canary/curl-client.yaml.
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-mesh-test
+  namespace: sample-app
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: sample-app
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/mesh-test/sa/curl-client

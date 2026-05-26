@@ -69,7 +69,8 @@ globalretail-platform/
 │   └── inventory-api/                 ← Go — proves the platform is language-agnostic
 ├── gitops/                            ← Layer 3 — GitOps delivery (ArgoCD)
 ├── observability/                     ← Layer 4 + 4b — Monitoring (in-cluster + Azure-managed in parallel)
-└── security/                          ← Layer 5 — Policy, secrets, scanning
+├── security/                          ← Layer 5 — Policy, secrets, scanning
+└── service-mesh/                      ← Layer 6 — Istio Ambient + canary demo + Kiali
 ```
 
 The folder names are flat and unprefixed on purpose — this is what a platform team's monorepo looks like in a real company. The reading order is captured in the layer table below.
@@ -93,6 +94,7 @@ Each layer has its own `README.md` answering eight questions (what it does, why 
 | 4b | Observability — Azure-managed (Monitor Workspace + Managed Grafana) | `observability/azure-managed/` | ✅ Built + tested in parallel (same `/metrics`, two backends, two UIs) |
 | 5 | Security (Kyverno + CSI Secrets Store + Workload Identity) | `security/` | ✅ Built + tested end-to-end (sample-app `/version` reads a Key Vault secret via Workload Identity) |
 | — | **Second workload: `inventory-api` (Go)** | `apps/inventory-api/` | ✅ Built + tested — same CI/CD, GitOps, observability, Kyverno policies as `sample-app`, in a different language. Both backends see identical metric values. |
+| 6 | Service mesh (Istio Ambient + Kiali + canary demo) | `service-mesh/` | 🚧 Code drafted, end-to-end test pending |
 
 ## How to deploy this in your own Azure subscription
 

@@ -1,0 +1,48 @@
+# Istio CNI — the network plugin that intercepts pod traffic into ztunnel.
+#
+# In Ambient mode, the CNI runs as a DaemonSet and hooks into the pod's
+# network namespace at creation time, redirecting all egress traffic to the
+# node-local ztunnel. There is no sidecar — the redirection is at the
+# kernel level via iptables rules installed by the CNI.
+#
+# AKS uses Azure CNI by default; Istio CNI runs ALONGSIDE it as a chained
+# plugin. No replacement.
+#
+# sync-wave: 1 — after istiod, in parallel with ztunnel readiness.
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: istio-cni
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  sources:
+    - repoURL: https://istio-release.storage.googleapis.com/charts
+      chart: cni
+      targetRevision: 1.24.2
+      helm:
+        valueFiles:
+          - $values/service-mesh/values/istio-cni-values.yaml
+        releaseName: istio-cni
+
+    - repoURL: https://github.com/iscoct/globalretail-platform
+      targetRevision: main
+      ref: values
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: istio-system
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - ApplyOutOfSyncOnly=true
+      - ServerSideApply=true

@@ -1,0 +1,45 @@
+# ztunnel — the Ambient mode L4 data plane DaemonSet.
+#
+# One Rust-based proxy per node, handling mTLS + L4 AuthZ + L4 telemetry for
+# every Ambient-enrolled pod on that node. Replaces the per-pod Envoy sidecar
+# of sidecar-mode Istio — same wire protocol, much less memory.
+#
+# sync-wave: 2 — after istio-cni (1) so the CNI is installed and pod redirect
+# rules are in place by the time ztunnel comes up.
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: ztunnel
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  sources:
+    - repoURL: https://istio-release.storage.googleapis.com/charts
+      chart: ztunnel
+      targetRevision: 1.24.2
+      helm:
+        valueFiles:
+          - $values/service-mesh/values/ztunnel-values.yaml
+        releaseName: ztunnel
+
+    - repoURL: https://github.com/iscoct/globalretail-platform
+      targetRevision: main
+      ref: values
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: istio-system
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - ApplyOutOfSyncOnly=true
+      - ServerSideApply=true

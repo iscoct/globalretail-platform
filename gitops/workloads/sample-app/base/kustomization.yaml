@@ -14,7 +14,8 @@ resources:
   - namespace.yaml
   - serviceaccount.yaml          # Workload Identity binding (Layer 5)
   - secret-provider-class.yaml   # CSI Secrets Store config (Layer 5)
-  - deployment.yaml
+  - deployment.yaml              # v1 of the app
+  - deployment-v2.yaml           # v2 — the canary target (Layer 6)
   - service.yaml
 
 # Common labels applied to every resource. Kustomize-managed labels show up

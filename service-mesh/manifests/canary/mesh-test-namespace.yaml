@@ -1,0 +1,12 @@
+# The mesh-test namespace hosts a curl client that drives the canary demo.
+# It IS enrolled in Ambient so its outbound traffic has a SPIFFE identity
+# that the AuthorizationPolicies in sample-app/inventory-api can match.
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: mesh-test
+  labels:
+    app.kubernetes.io/managed-by: argocd
+    app.kubernetes.io/part-of: globalretail
+    istio.io/dataplane-mode: ambient
