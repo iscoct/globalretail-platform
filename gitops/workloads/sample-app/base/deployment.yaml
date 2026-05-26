@@ -20,8 +20,15 @@ spec:
       labels:
         app.kubernetes.io/name: sample-app
         app.kubernetes.io/part-of: globalretail
+        # This label is what the Workload Identity webhook looks for. With
+        # it, AND a SA whose annotation points to a UAMI client_id, AND
+        # AKS having `workload_identity_enabled = true` (Layer 1), the
+        # webhook injects AZURE_CLIENT_ID / AZURE_TENANT_ID env vars and
+        # a projected SA token at AZURE_FEDERATED_TOKEN_FILE.
+        azure.workload.identity/use: 'true'
     spec:
       # AKS kubelet UAMI has AcrPull on the ACR (Layer 1), so no imagePullSecret.
+      serviceAccountName: sample-app
       containers:
         - name: app
           # Image name in the base is the logical name; the overlay rewrites
@@ -41,6 +48,17 @@ spec:
               value: "3000"
             # APP_VERSION and APP_COMMIT are read by the /version endpoint.
             # The overlay can patch these per-env (e.g., to the deployed SHA).
+            #
+            # WELCOME_MESSAGE_FILE points at the path where the CSI driver
+            # mounts the Key Vault secret. The app reads from this file
+            # at request time so secret rotations (when enabled) are
+            # visible without a pod restart.
+            - name: WELCOME_MESSAGE_FILE
+              value: /mnt/secrets/welcome-message
+          volumeMounts:
+            - name: secrets-store
+              mountPath: /mnt/secrets
+              readOnly: true
           resources:
             requests:
               memory: 64Mi
@@ -81,3 +99,13 @@ spec:
             readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
+      volumes:
+        - name: secrets-store
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              # References the SecretProviderClass in the SAME namespace.
+              # The driver looks at the SPC to know WHICH secrets to fetch
+              # and WHERE from (Azure Key Vault, via the workload UAMI).
+              secretProviderClass: sample-app-secrets

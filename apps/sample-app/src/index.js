@@ -1,8 +1,29 @@
 const express = require('express');
+const fs = require('fs');
 const promClient = require('prom-client');
 
 const app = express();
 const startedAt = Date.now();
+
+// Read the welcome-message secret from the CSI mount. Read at request time
+// (not cached at startup) so that secret rotation — when enabled via the
+// driver's `enableSecretRotation: true` value — is visible without
+// restarting the pod. The cost is a small file read per /version call.
+function readWelcomeMessage() {
+  const path = process.env.WELCOME_MESSAGE_FILE;
+  if (!path) return null;
+  try {
+    return fs.readFileSync(path, 'utf8').trim();
+  } catch (err) {
+    // The mount path may not exist (no CSI driver installed yet) or the
+    // file may not be there (SecretProviderClass not applied / wrong key).
+    // We return null instead of throwing so /version still serves a
+    // useful response — distinguishing 'no mount configured' from
+    // 'mount configured but file missing' is the operator's job
+    // (kubectl describe pod / kubectl exec).
+    return null;
+  }
+}
 
 // --- Prometheus instrumentation ----------------------------------------------
 // A per-app Registry keeps OUR metrics scoped — important once more apps share
@@ -58,10 +79,15 @@ app.get('/health', (_req, res) => {
 });
 
 app.get('/version', (_req, res) => {
+  const welcomeMessage = readWelcomeMessage();
   res.json({
     name: 'globalretail-sample-app',
     version: process.env.APP_VERSION || 'dev',
     commit: process.env.APP_COMMIT || 'unknown',
+    // welcome_message is the lab's end-to-end proof that the workload
+    // identity → CSI driver → Azure Key Vault path works. If null, the
+    // mount is misconfigured (or running outside the cluster).
+    welcome_message: welcomeMessage,
   });
 });
 

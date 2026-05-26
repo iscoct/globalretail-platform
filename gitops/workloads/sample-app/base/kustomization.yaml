@@ -12,6 +12,8 @@ kind: Kustomization
 # in it cleanly.
 resources:
   - namespace.yaml
+  - serviceaccount.yaml          # Workload Identity binding (Layer 5)
+  - secret-provider-class.yaml   # CSI Secrets Store config (Layer 5)
   - deployment.yaml
   - service.yaml
 
