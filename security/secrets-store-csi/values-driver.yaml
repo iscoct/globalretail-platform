@@ -32,3 +32,18 @@ linux:
       cpu: 200m
 windows:
   enabled: false
+
+# CRITICAL for Workload Identity: tell the driver to request projected SA
+# tokens for the audience that the Azure provider expects. The driver
+# obtains tokens via the K8s TokenRequest API and forwards them to the
+# provider DaemonSet pod (which lives separately and cannot read the
+# workload pod's own token file).
+#
+# Without this, the provider fails to mount with:
+#   "failed to build auth config for mode None: failed to parse workload
+#    identity tokens, error: service account tokens not found"
+#
+# The audience MUST match `api://AzureADTokenExchange` (the Entra ID
+# token-exchange audience that our federated credential matches on).
+tokenRequests:
+  - audience: api://AzureADTokenExchange
