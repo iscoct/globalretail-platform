@@ -268,6 +268,19 @@ The first version of our `allow-prometheus-scrape` policy had `to.operation.path
 
 **Fix:** kept policies L4-only (ports, principals, namespaces). When you genuinely need L7 AuthZ (e.g., "allow GET but not POST"), deploy a Waypoint in that namespace — but be aware that traffic now traverses an extra hop.
 
+### 6.3b Waypoint loses the original principal — pod-level AuthZ sees the waypoint, not the client
+
+The next thing that broke after fixing STRICT: even with PERMISSIVE in `sample-app`, the canary demo started failing with `policy rejection: allow policies exist, but none allowed`. Reason:
+
+- Client → ztunnel → waypoint terminates mTLS → reads VS+DR, picks v1 or v2 → waypoint opens a NEW connection to the backend pod → backend pod's ztunnel sees the connection with source identity `sample-app/sample-app-waypoint`, NOT the original `mesh-test/curl-client`.
+- Our backend-pod AuthZ allowed only `mesh-test/curl-client`. The waypoint's identity wasn't on the list → denied.
+
+You have two clean fixes:
+- **Move AuthZ to the waypoint** with `targetRefs` pointing at the Gateway. The waypoint sees the original principal. Backend pods then trust anything coming from the waypoint.
+- **Allow the waypoint SA at the backend pod** (transitive trust). Simpler but spreads the policy across two layers.
+
+We took a third path: **drop pod-level AuthZ on `sample-app` entirely**. The Service is fronted by the waypoint, but there's no useful pod-level identity check we can do without dealing with the waypoint-passthrough problem. The actual zero-trust teaching is on `inventory-api`, where there's no waypoint and AuthZ is enforced at the pod's ztunnel directly. sample-app keeps `PeerAuthentication: PERMISSIVE` for encryption-aware mesh peers, no AuthorizationPolicy.
+
 ### 6.4 ArgoCD reports gateway-api-crds + istiod as OutOfSync forever (cosmetic)
 
 Two ArgoCD Applications stay `OutOfSync` even when the underlying resources are healthy and running:

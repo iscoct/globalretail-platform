@@ -1,81 +1,29 @@
 # AuthorizationPolicy — zero-trust authorization between mesh pods.
 #
-# In Ambient mode, ztunnel enforces L4 AuthorizationPolicy (deny/allow by
-# source identity + destination port). L7 AuthZ (path, method, host) needs
-# a Waypoint proxy. For this lab we keep all AuthZ rules L4 so the same
-# policy works whether a namespace has a waypoint or not.
+# Pedagogical scope (kept narrow on purpose):
+#   - sample-app: no AuthZ policies. With PeerAuthentication PERMISSIVE
+#     and no AuthZ rules, anyone can reach sample-app pods. This keeps
+#     the canary demo (waypoint → backend) and Prometheus scrapes both
+#     working without juggling waypoint-passthrough rules.
+#   - inventory-api: this is where the AuthZ teaching happens.
+#     - default-deny (no fields) — no traffic allowed unless explicitly
+#       permitted.
+#     - allow-sample-app-to-inventory — sample-app's SA (SPIFFE principal)
+#       is the only mesh identity allowed to talk to inventory-api on
+#       port 8080. The curl-client in mesh-test (different SA) gets
+#       denied — that's the demo.
+#     - allow-prometheus-scrape — non-mesh observability tooling
+#       (kube-prometheus-stack in `monitoring`, ama-metrics in
+#       `kube-system`) is allowed to reach port 8080 for /metrics
+#       scraping. Source identified by namespace (no SPIFFE because
+#       those pods aren't in the mesh).
 #
-# Pattern: "default deny + explicit allows". For each app namespace:
-#   1. default-deny  — no rules, no matches → reject (when combined with at
-#      least one ALLOW policy in the namespace, this is Istio's
-#      conventional way to express deny-all).
-#   2. allow-non-mesh-scrape — for Prometheus (monitoring ns) and
-#      ama-metrics (kube-system ns) to reach /metrics. Source is identified
-#      by namespace (no SPIFFE — those pods aren't in the mesh).
-#   3. The cross-app allow — sample-app's SA can talk to inventory-api,
-#      identified by SPIFFE principal.
-#
-# Note: kubectl port-forward goes via the kubelet (host network), which
-# Istio Ambient treats specially — those connections are NOT intercepted by
-# ztunnel, so no AuthZ rule is needed for port-forward to work.
-
-# ===== sample-app namespace =====
-
----
-apiVersion: security.istio.io/v1
-kind: AuthorizationPolicy
-metadata:
-  name: default-deny
-  namespace: sample-app
-spec: {}
-
----
-# Allow the curl-client in mesh-test to hit sample-app (drives the canary
-# demo). Principal-based — the curl-client pod has a SPIFFE identity.
-apiVersion: security.istio.io/v1
-kind: AuthorizationPolicy
-metadata:
-  name: allow-mesh-test
-  namespace: sample-app
-spec:
-  selector:
-    matchLabels:
-      app.kubernetes.io/name: sample-app
-  action: ALLOW
-  rules:
-    - from:
-        - source:
-            principals:
-              - cluster.local/ns/mesh-test/sa/curl-client
-
----
-# Allow Prometheus (in-cluster, monitoring ns) AND ama-metrics (Azure
-# Managed Prometheus agent, kube-system ns) to scrape sample-app's port
-# 3000 endpoint. These pods are NOT in the mesh — Istio matches them by
-# namespace via the source IP → pod → namespace lookup.
-apiVersion: security.istio.io/v1
-kind: AuthorizationPolicy
-metadata:
-  name: allow-prometheus-scrape
-  namespace: sample-app
-spec:
-  selector:
-    matchLabels:
-      app.kubernetes.io/name: sample-app
-  action: ALLOW
-  rules:
-    - from:
-        - source:
-            namespaces:
-              - monitoring
-              - kube-system
-      to:
-        - operation:
-            ports: ["3000"]
+# In Ambient mode, ztunnel enforces L4 AuthorizationPolicy only (source
+# identity + destination port). L7 (path, method, host) needs a Waypoint.
+# We keep AuthZ L4 here.
 
 # ===== inventory-api namespace =====
 
----
 apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy
 metadata:
@@ -84,10 +32,10 @@ metadata:
 spec: {}
 
 ---
-# The cross-app allow: sample-app's ServiceAccount can talk to inventory-
-# api. Identity comes from SPIFFE: the source principal is
-# cluster.local/ns/sample-app/sa/sample-app. ztunnel verifies the mTLS
-# cert and matches its SPIFFE SAN against this policy.
+# THE zero-trust teaching policy. SPIFFE-based: only the sample-app
+# ServiceAccount can reach inventory-api on port 8080. The mesh-test
+# curl-client (cluster.local/ns/mesh-test/sa/curl-client) is NOT in
+# this list and gets rejected by ztunnel.
 apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy
 metadata:
@@ -109,6 +57,8 @@ spec:
 
 ---
 # Allow Prometheus + ama-metrics to scrape inventory-api's port 8080.
+# Source matching by namespace works for non-mesh sources because Istio
+# can look up source pod IP → namespace via the K8s API.
 apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy
 metadata:
