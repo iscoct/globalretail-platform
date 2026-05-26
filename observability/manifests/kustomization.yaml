@@ -24,3 +24,6 @@ resources:
   - inventory-api/servicemonitor.yaml
   - inventory-api/prometheusrule.yaml
   - inventory-api/dashboard.yaml
+  # Istio Ambient (Layer 6 follow-up — feeds Kiali's service graph)
+  - istio/ztunnel-podmonitor.yaml
+  - istio/waypoint-podmonitor.yaml

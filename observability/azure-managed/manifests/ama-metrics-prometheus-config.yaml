@@ -72,3 +72,52 @@ data:
           target_label: pod
         - source_labels: [__meta_kubernetes_namespace]
           target_label: namespace
+
+    # ===== Istio Ambient — ztunnel + waypoints (Layer 6) =====
+    # Mirrors the kube-prometheus-stack PodMonitors at
+    # observability/manifests/istio/. Two separate jobs because ztunnel
+    # and waypoints expose metrics at different paths.
+
+    - job_name: istio-ztunnel
+      scheme: http
+      metrics_path: /metrics
+      scrape_interval: 30s
+      kubernetes_sd_configs:
+        - role: pod
+          namespaces:
+            names:
+              - istio-system
+      relabel_configs:
+        - source_labels: [__meta_kubernetes_pod_label_app]
+          action: keep
+          regex: ztunnel
+        - source_labels: [__meta_kubernetes_pod_container_port_name]
+          action: keep
+          regex: ztunnel-stats
+        - source_labels: [__meta_kubernetes_pod_name]
+          target_label: pod
+        - source_labels: [__meta_kubernetes_namespace]
+          target_label: namespace
+
+    - job_name: istio-waypoint
+      scheme: http
+      metrics_path: /stats/prometheus
+      scrape_interval: 30s
+      kubernetes_sd_configs:
+        - role: pod
+      relabel_configs:
+        # The waypoint pods carry the label
+        # `gateway.istio.io/managed=istio.io-mesh-controller`.
+        # Label keys with dots get translated by kubernetes_sd_configs
+        # into __meta_kubernetes_pod_label_<sanitized> — dots become
+        # underscores. Slashes also become underscores.
+        - source_labels: [__meta_kubernetes_pod_label_gateway_istio_io_managed]
+          action: keep
+          regex: istio.io-mesh-controller
+        - source_labels: [__meta_kubernetes_pod_container_port_name]
+          action: keep
+          regex: metrics
+        - source_labels: [__meta_kubernetes_pod_name]
+          target_label: pod
+        - source_labels: [__meta_kubernetes_namespace]
+          target_label: namespace
