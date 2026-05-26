@@ -1,80 +1,48 @@
 # AuthorizationPolicy — zero-trust authorization between mesh pods.
 #
-# Pedagogical scope (kept narrow on purpose):
-#   - sample-app: no AuthZ policies. With PeerAuthentication PERMISSIVE
-#     and no AuthZ rules, anyone can reach sample-app pods. This keeps
-#     the canary demo (waypoint → backend) and Prometheus scrapes both
-#     working without juggling waypoint-passthrough rules.
-#   - inventory-api: this is where the AuthZ teaching happens.
-#     - default-deny (no fields) — no traffic allowed unless explicitly
-#       permitted.
-#     - allow-sample-app-to-inventory — sample-app's SA (SPIFFE principal)
-#       is the only mesh identity allowed to talk to inventory-api on
-#       port 8080. The curl-client in mesh-test (different SA) gets
-#       denied — that's the demo.
-#     - allow-prometheus-scrape — non-mesh observability tooling
-#       (kube-prometheus-stack in `monitoring`, ama-metrics in
-#       `kube-system`) is allowed to reach port 8080 for /metrics
-#       scraping. Source identified by namespace (no SPIFFE because
-#       those pods aren't in the mesh).
+# Pedagogical pivot from "default-deny + explicit allow" to
+# "default-allow + explicit deny" for inventory-api.
 #
-# In Ambient mode, ztunnel enforces L4 AuthorizationPolicy only (source
-# identity + destination port). L7 (path, method, host) needs a Waypoint.
-# We keep AuthZ L4 here.
+# Reason: in Ambient L4 AuthZ, the `source.namespaces` field doesn't
+# reliably match non-mesh sources (Prometheus in monitoring, ama-metrics
+# in kube-system). When ztunnel logs show src.namespace=monitoring but
+# the namespace-keyed ALLOW rule never matches, the policy falls through
+# to the default-deny and Prometheus scrapes break — even on PERMISSIVE
+# PeerAuthentication. This is documented in service-mesh/README.md §6.3c.
+#
+# The cleaner pattern: default-allow with explicit DENY for the
+# principals we want to keep out. Istio's policy precedence is
+# CUSTOM → DENY → ALLOW, so a DENY rule always wins. We DENY
+# `mesh-test/curl-client` (the canary demo client) from reaching
+# inventory-api on port 3000 — that proves the SPIFFE-based identity
+# check works for mesh peers, while non-mesh observability tooling
+# continues to scrape without policy gymnastics.
+#
+# sample-app has no AuthZ at all — see §6.3b (waypoint passthrough).
 
 # ===== inventory-api namespace =====
+#
+# Default is ALLOW (no ALLOW policies in the namespace, only DENY).
+# The DENY below targets exactly one principal: the curl-client in
+# mesh-test. The cross-app demo (sample-app -> inventory-api) is NOT
+# in the deny list, so it works. Prometheus + ama-metrics scrapes are
+# NOT in the deny list either, so they also work.
 
 apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy
 metadata:
-  name: default-deny
-  namespace: inventory-api
-spec: {}
-
----
-# THE zero-trust teaching policy. SPIFFE-based: only the sample-app
-# ServiceAccount can reach inventory-api on port 8080. The mesh-test
-# curl-client (cluster.local/ns/mesh-test/sa/curl-client) is NOT in
-# this list and gets rejected by ztunnel.
-apiVersion: security.istio.io/v1
-kind: AuthorizationPolicy
-metadata:
-  name: allow-sample-app-to-inventory
+  name: deny-mesh-test
   namespace: inventory-api
 spec:
   selector:
     matchLabels:
       app.kubernetes.io/name: inventory-api
-  action: ALLOW
+  action: DENY
   rules:
     - from:
         - source:
             principals:
-              - cluster.local/ns/sample-app/sa/sample-app
-      to:
-        - operation:
-            ports: ["3000"]
-
----
-# Allow Prometheus + ama-metrics to scrape inventory-api's port 8080.
-# Source matching by namespace works for non-mesh sources because Istio
-# can look up source pod IP → namespace via the K8s API.
-apiVersion: security.istio.io/v1
-kind: AuthorizationPolicy
-metadata:
-  name: allow-prometheus-scrape
-  namespace: inventory-api
-spec:
-  selector:
-    matchLabels:
-      app.kubernetes.io/name: inventory-api
-  action: ALLOW
-  rules:
-    - from:
-        - source:
-            namespaces:
-              - monitoring
-              - kube-system
+              - cluster.local/ns/mesh-test/sa/curl-client
       to:
         - operation:
             ports: ["3000"]
