@@ -4,7 +4,7 @@
 # Stage 2 (runtime): copy the binary into distroless/static — ~5 MiB final
 # image, no shell, no libc, no nothing except the binary and CA certs.
 
-ARG GO_VERSION=1.23
+ARG GO_VERSION=1.25
 
 # --- Stage 1: build a static binary ------------------------------------------
 FROM golang:${GO_VERSION}-bookworm AS build
