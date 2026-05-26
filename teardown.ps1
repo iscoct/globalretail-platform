@@ -152,7 +152,11 @@ foreach ($rg in $existing) {
 # Layer 1's azuread_group.aks_admins is named `aks-admins-<workload>-<env>-<short>`.
 # This group is free (no Azure cost) but leaving it orphaned is messy.
 if (-not $SkipEntraGroup) {
-    $groupName = "aks-admins-${Workload}-${Environment}-${LocationShort}"
+    # Layer 1's azuread_group.aks_admins uses display_name = "${var.workload}-aks-admins"
+    # (see infra/main.tf). The format is intentionally short — environment + region
+    # codes are NOT in the group name because the group is reused across environments
+    # of the same workload.
+    $groupName = "${Workload}-aks-admins"
     Write-Host ""
     Write-Host "Entra ID group cleanup..." -ForegroundColor Cyan
     $group = az ad group show --group $groupName 2>$null | ConvertFrom-Json
