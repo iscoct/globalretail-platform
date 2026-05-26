@@ -34,7 +34,12 @@ describe('GET /version', () => {
   });
 
   it('returns the file contents (trimmed) when the file exists', async () => {
-    const tmp = path.join(os.tmpdir(), `welcome-message-${Date.now()}`);
+    // Use mkdtempSync (kernel-randomised suffix) instead of a Date.now()-derived
+    // path. Predictable temp filenames are a classic race-condition vector
+    // (CodeQL js/insecure-temporary-file). mkdtemp creates the directory with
+    // 0700 perms before returning the name, eliminating the TOCTOU window.
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sample-app-test-'));
+    const tmp = path.join(tmpDir, 'welcome-message');
     fs.writeFileSync(tmp, 'hello-from-key-vault-via-workload-identity\n');
     process.env.WELCOME_MESSAGE_FILE = tmp;
     try {
@@ -42,7 +47,7 @@ describe('GET /version', () => {
       expect(res.body.welcome_message).toBe('hello-from-key-vault-via-workload-identity');
     } finally {
       delete process.env.WELCOME_MESSAGE_FILE;
-      fs.unlinkSync(tmp);
+      fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
 });
