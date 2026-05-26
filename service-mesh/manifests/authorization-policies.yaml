@@ -53,7 +53,7 @@ spec:
               - cluster.local/ns/sample-app/sa/sample-app
       to:
         - operation:
-            ports: ["8080"]
+            ports: ["3000"]
 
 ---
 # Allow Prometheus + ama-metrics to scrape inventory-api's port 8080.
@@ -77,4 +77,4 @@ spec:
               - kube-system
       to:
         - operation:
-            ports: ["8080"]
+            ports: ["3000"]
