@@ -1,0 +1,12 @@
+# Compiled binaries
+/inventory-api
+/bin/
+
+# Test / coverage output
+coverage.out
+*.test
+
+# OS / editor
+.DS_Store
+.idea/
+*.swp
