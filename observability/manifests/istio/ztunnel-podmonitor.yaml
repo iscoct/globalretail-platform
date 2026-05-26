@@ -1,0 +1,36 @@
+# Tells the Prometheus Operator to scrape the ztunnel DaemonSet.
+#
+# ztunnel is the L4 data plane in Istio Ambient. It emits standard Istio
+# metrics (istio_build, istio_xds_*, istio_connections_*, etc.) AND the
+# canonical mesh request counters that Kiali consumes (istio_requests_total,
+# istio_request_duration_milliseconds, istio_request_bytes, ...).
+#
+# Endpoint shape:
+#   - container port 15020 (named `ztunnel-stats` in the chart's pod spec)
+#   - HTTP path /metrics (NB: NOT /stats/prometheus — that's the Envoy
+#     convention used by the waypoint, but ztunnel is Rust + a different
+#     scrape endpoint)
+#
+# Without this PodMonitor, the istio_* time series stay empty in Prometheus
+# and Kiali's service graph never lights up.
+
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: ztunnel
+  namespace: istio-system
+  labels:
+    app.kubernetes.io/name: ztunnel
+    app.kubernetes.io/part-of: globalretail
+spec:
+  selector:
+    matchLabels:
+      app: ztunnel
+  namespaceSelector:
+    matchNames:
+      - istio-system
+  podMetricsEndpoints:
+    - port: ztunnel-stats
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s

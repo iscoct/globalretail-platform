@@ -289,11 +289,15 @@ Two ArgoCD Applications stay `OutOfSync` even when the underlying resources are 
 
 Both are cosmetic. The mesh works; Kiali shows the traffic graph; the canary split works. Production cleanup is to add `ignoreDifferences` blocks (like we did for the Kyverno CRDs in Layer 5).
 
-### 6.5 Kiali graph empty until ztunnel `istio_*` metrics get scraped
+### 6.5 Kiali graph empty until ztunnel + waypoint `istio_*` metrics get scraped
 
-After the mesh came up, Kiali rendered an empty graph for the first few minutes. The reason: the ztunnel and waypoint pods emit Istio's standard metrics on `:15020/stats/prometheus`, and our kube-prometheus-stack Prometheus didn't have a `PodMonitor` selecting them — so the `istio_requests_total` series stayed empty in Prometheus and Kiali had no data to draw.
+After the mesh came up, Kiali rendered an empty graph. The reason: the ztunnel and waypoint pods emit Istio's standard metrics, but our kube-prometheus-stack Prometheus had no `PodMonitor` selecting them — so the `istio_requests_total` series stayed empty in Prometheus and Kiali had no data to draw.
 
-**Fix:** add a `PodMonitor` selecting `app=ztunnel` and the waypoint pods, into `observability/manifests/istio/`. (Deferred to a follow-up; the canary demo still proves the routing works via the curl-client logs, but the graph view in Kiali stays sparse until the PodMonitor lands.)
+**Fix shipped** in `observability/manifests/istio/`:
+- `ztunnel-podmonitor.yaml` — selects `app=ztunnel`, scrapes `:15020/metrics` (note: ztunnel is Rust and uses `/metrics`, NOT Envoy's `/stats/prometheus`).
+- `waypoint-podmonitor.yaml` — selects the Istio-managed label `gateway.istio.io/managed=istio.io-mesh-controller`, scrapes `:15020/stats/prometheus` (Envoy convention). The namespaceSelector is `any: true` so future waypoints in other namespaces are scraped automatically.
+
+The Managed Prometheus pipeline (Layer 4b) gets the same coverage via two new `scrape_configs` jobs (`istio-ztunnel`, `istio-waypoint`) in the `ama-metrics-prometheus-config` ConfigMap, mirroring the PodMonitor shape.
 
 ## 7. Likely student questions
 
