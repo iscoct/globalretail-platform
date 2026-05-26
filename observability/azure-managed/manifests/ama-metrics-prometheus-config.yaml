@@ -25,6 +25,7 @@ metadata:
 data:
   prometheus-config: |-
     scrape_configs:
+    # ===== sample-app (Node) =====
     - job_name: sample-app
       scheme: http
       metrics_path: /metrics
@@ -35,17 +36,39 @@ data:
             names:
               - sample-app
       relabel_configs:
-        # Keep only endpoints owned by the `sample-app` Service.
         - source_labels: [__meta_kubernetes_service_name]
           action: keep
           regex: sample-app
-        # Keep only the port named `http` (port 80 → pod 3000).
         - source_labels: [__meta_kubernetes_endpoint_port_name]
           action: keep
           regex: http
-        # Carry the pod name as a label on every series.
         - source_labels: [__meta_kubernetes_pod_name]
           target_label: pod
-        # Carry the namespace.
+        - source_labels: [__meta_kubernetes_namespace]
+          target_label: namespace
+
+    # ===== inventory-api (Go) =====
+    # Same scrape pattern as sample-app — the only difference is the
+    # namespace + service name. The pedagogical point: adding a second
+    # workload to Managed Prometheus is a 15-line scrape_config in this
+    # SAME ConfigMap, NOT a re-deploy of ama-metrics.
+    - job_name: inventory-api
+      scheme: http
+      metrics_path: /metrics
+      scrape_interval: 30s
+      kubernetes_sd_configs:
+        - role: endpoints
+          namespaces:
+            names:
+              - inventory-api
+      relabel_configs:
+        - source_labels: [__meta_kubernetes_service_name]
+          action: keep
+          regex: inventory-api
+        - source_labels: [__meta_kubernetes_endpoint_port_name]
+          action: keep
+          regex: http
+        - source_labels: [__meta_kubernetes_pod_name]
+          target_label: pod
         - source_labels: [__meta_kubernetes_namespace]
           target_label: namespace

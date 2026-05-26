@@ -1,0 +1,101 @@
+# Grafana dashboard for inventory-api.
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: inventory-api-dashboard
+  namespace: inventory-api
+  labels:
+    grafana_dashboard: '1'
+    app.kubernetes.io/name: inventory-api
+    app.kubernetes.io/part-of: globalretail
+  annotations:
+    grafana_folder: GlobalRetail
+data:
+  inventory-api-dashboard.json: |
+    {
+      "schemaVersion": 39,
+      "title": "GlobalRetail inventory-api",
+      "tags": ["globalretail", "inventory-api"],
+      "timezone": "browser",
+      "refresh": "30s",
+      "time": { "from": "now-30m", "to": "now" },
+      "panels": [
+        {
+          "type": "stat",
+          "title": "SLI: /inventory <100ms (5m)",
+          "id": 1,
+          "gridPos": { "h": 6, "w": 6, "x": 0, "y": 0 },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "min": 0,
+              "max": 1,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "red", "value": null },
+                  { "color": "orange", "value": 0.95 },
+                  { "color": "green", "value": 0.99 }
+                ]
+              }
+            }
+          },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" },
+          "targets": [{ "expr": "inventory_api:lookup_sli:ratio5m", "refId": "A" }]
+        },
+        {
+          "type": "stat",
+          "title": "Lookup hits / misses (5m rate)",
+          "id": 2,
+          "gridPos": { "h": 6, "w": 6, "x": 6, "y": 0 },
+          "fieldConfig": { "defaults": { "unit": "reqps" } },
+          "targets": [
+            { "expr": "sum(rate(inventory_lookups_total{app=\"inventory-api\",outcome=\"hit\"}[5m]))", "legendFormat": "hit", "refId": "A" },
+            { "expr": "sum(rate(inventory_lookups_total{app=\"inventory-api\",outcome=\"miss\"}[5m]))", "legendFormat": "miss", "refId": "B" }
+          ]
+        },
+        {
+          "type": "timeseries",
+          "title": "HTTP request rate by route + status",
+          "id": 3,
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+          "fieldConfig": { "defaults": { "unit": "reqps" } },
+          "targets": [
+            { "expr": "sum by (route, status) (rate(http_request_duration_seconds_count{app=\"inventory-api\"}[1m]))", "legendFormat": "{{route}} {{status}}", "refId": "A" }
+          ]
+        },
+        {
+          "type": "timeseries",
+          "title": "Latency p50/p95/p99 on /inventory/{sku}",
+          "id": 4,
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
+          "fieldConfig": { "defaults": { "unit": "s" } },
+          "targets": [
+            { "expr": "histogram_quantile(0.50, sum by (le) (rate(http_request_duration_seconds_bucket{app=\"inventory-api\", route=\"/inventory/{sku}\"}[5m])))", "legendFormat": "p50", "refId": "A" },
+            { "expr": "histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{app=\"inventory-api\", route=\"/inventory/{sku}\"}[5m])))", "legendFormat": "p95", "refId": "B" },
+            { "expr": "histogram_quantile(0.99, sum by (le) (rate(http_request_duration_seconds_bucket{app=\"inventory-api\", route=\"/inventory/{sku}\"}[5m])))", "legendFormat": "p99", "refId": "C" }
+          ]
+        },
+        {
+          "type": "timeseries",
+          "title": "Process RSS memory",
+          "id": 5,
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+          "fieldConfig": { "defaults": { "unit": "decbytes" } },
+          "targets": [
+            { "expr": "process_resident_memory_bytes{app=\"inventory-api\"}", "legendFormat": "{{pod}}", "refId": "A" }
+          ]
+        },
+        {
+          "type": "timeseries",
+          "title": "Goroutines (live)",
+          "id": 6,
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 14 },
+          "fieldConfig": { "defaults": { "unit": "short" } },
+          "targets": [
+            { "expr": "go_goroutines{app=\"inventory-api\"}", "legendFormat": "{{pod}}", "refId": "A" }
+          ]
+        }
+      ]
+    }

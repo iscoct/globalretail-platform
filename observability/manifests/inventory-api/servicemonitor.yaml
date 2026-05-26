@@ -1,0 +1,20 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: inventory-api
+  namespace: inventory-api
+  labels:
+    app.kubernetes.io/name: inventory-api
+    app.kubernetes.io/part-of: globalretail
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: inventory-api
+  namespaceSelector:
+    matchNames:
+      - inventory-api
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s

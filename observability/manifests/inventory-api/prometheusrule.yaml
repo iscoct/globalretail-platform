@@ -1,0 +1,93 @@
+# PrometheusRule for inventory-api.
+#
+# SLO target: 99% of /inventory/{sku} lookups complete in under 100ms over
+# 30 days. Same burn-rate alert pattern as sample-app's SLO (see
+# observability/manifests/alerts/sample-app-slos.yaml).
+
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: inventory-api-slo
+  namespace: inventory-api
+  labels:
+    app.kubernetes.io/name: inventory-api
+    app.kubernetes.io/part-of: globalretail
+spec:
+  groups:
+    # --- Recording rules ----------------------------------------------------
+    - name: inventory-api.slo.recording
+      interval: 30s
+      rules:
+        - record: inventory_api:lookup_total:rate5m
+          expr: |
+            sum by (outcome) (
+              rate(inventory_lookups_total{app="inventory-api"}[5m])
+            )
+
+        # SLI: fraction of /inventory/{sku} responses served under 100ms.
+        - record: inventory_api:lookup_sli:ratio5m
+          expr: |
+            (
+              sum(rate(http_request_duration_seconds_bucket{
+                app="inventory-api", route="/inventory/{sku}", le="0.1"
+              }[5m]))
+              /
+              sum(rate(http_request_duration_seconds_count{
+                app="inventory-api", route="/inventory/{sku}"
+              }[5m]))
+            )
+
+        - record: inventory_api:lookup_sli:ratio1h
+          expr: |
+            (
+              sum(rate(http_request_duration_seconds_bucket{
+                app="inventory-api", route="/inventory/{sku}", le="0.1"
+              }[1h]))
+              /
+              sum(rate(http_request_duration_seconds_count{
+                app="inventory-api", route="/inventory/{sku}"
+              }[1h]))
+            )
+
+    # --- Alerting rules -----------------------------------------------------
+    - name: inventory-api.slo.alerts
+      interval: 30s
+      rules:
+        - alert: InventoryApiLookupSLOFastBurn
+          expr: inventory_api:lookup_sli:ratio5m < 0.95
+          for: 2m
+          labels:
+            severity: critical
+            slo: inventory-api-lookup-latency
+          annotations:
+            summary: 'inventory-api /inventory/{sku} burning SLO budget fast (5m window)'
+            description: |
+              {{ $value | humanizePercentage }} of /inventory/{sku} responses in
+              the last 5 minutes completed within 100ms. SLO target is 99%.
+
+        - alert: InventoryApiLookupSLOSlowBurn
+          expr: inventory_api:lookup_sli:ratio1h < 0.98
+          for: 15m
+          labels:
+            severity: warning
+            slo: inventory-api-lookup-latency
+          annotations:
+            summary: 'inventory-api /inventory/{sku} burning SLO budget (1h window)'
+            description: |
+              {{ $value | humanizePercentage }} of /inventory/{sku} responses
+              over the last hour completed within 100ms. SLO target is 99%.
+
+        - alert: InventoryApiMetricsScrapeMissing
+          expr: |
+            absent(http_request_duration_seconds_count{
+              app="inventory-api"
+            })
+          for: 5m
+          labels:
+            severity: warning
+            slo: inventory-api-lookup-latency
+          annotations:
+            summary: 'inventory-api /metrics scrape is missing data'
+            description: |
+              Prometheus has not received any http_request_duration_seconds
+              samples from inventory-api for 5 minutes.
