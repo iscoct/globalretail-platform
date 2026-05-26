@@ -268,6 +268,30 @@ The first version of our `allow-prometheus-scrape` policy had `to.operation.path
 
 **Fix:** kept policies L4-only (ports, principals, namespaces). When you genuinely need L7 AuthZ (e.g., "allow GET but not POST"), deploy a Waypoint in that namespace — but be aware that traffic now traverses an extra hop.
 
+### 6.3c L4 `source.namespaces` doesn't match non-mesh sources reliably in Ambient
+
+Tried to allow Prometheus + ama-metrics scrapes via:
+
+```yaml
+rules:
+  - from:
+      - source:
+          namespaces: [monitoring, kube-system]
+    to:
+      - operation:
+          ports: ["3000"]
+```
+
+ztunnel's own log lines unambiguously show `src.namespace="monitoring"` on the rejected connection, so the namespace IS identified. But the ALLOW rule never matches and the connection falls through to the default-deny.
+
+Empirically: in Istio 1.24.2 Ambient mode, `source.namespaces` matching against non-mesh source pods (no SPIFFE identity) is unreliable for L4 enforcement at ztunnel. The match works for in-mesh sources where SPIFFE identity establishes namespace authoritatively.
+
+**Pivot:** switched inventory-api from "default-deny + explicit ALLOW" to "default-allow + explicit DENY." Istio policy precedence is `CUSTOM → DENY → ALLOW`, so the DENY rule for `cluster.local/ns/mesh-test/sa/curl-client` always wins. Pedagogically still strong — explicit DENY of one principal is just as good a demo of identity-based AuthZ as the inverse. Prometheus + ama-metrics + sample-app SA all keep working because they're not on the deny list.
+
+### 6.3d inventory-api AuthZ ports were wrong (8080 vs actual 3000)
+
+Original AuthorizationPolicies targeted port 8080 because we (incorrectly) assumed the Go service used that port. The container actually listens on 3000 — the same port as sample-app. ztunnel showed `dst.addr=...:3000` while the policy was for `:8080`, so all inbound was silently denied. Fixed in PR #35. Lesson: always cross-check the AuthZ port against `kubectl get pod -o jsonpath='{.spec.containers[0].ports}'`, not against memory or assumption.
+
 ### 6.3b Waypoint loses the original principal — pod-level AuthZ sees the waypoint, not the client
 
 The next thing that broke after fixing STRICT: even with PERMISSIVE in `sample-app`, the canary demo started failing with `policy rejection: allow policies exist, but none allowed`. Reason:
