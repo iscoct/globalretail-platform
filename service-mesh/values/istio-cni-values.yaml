@@ -1,0 +1,37 @@
+# istio-cni Helm chart values.
+#
+# In Ambient mode, the CNI plugin is what intercepts pod traffic and routes
+# it through the ztunnel DaemonSet on the same node. There is no sidecar
+# proxy — the CNI hooks the network namespace at pod-creation time and
+# redirects all traffic to/from the pod to the local ztunnel.
+#
+# `profile: ambient` + `ambient.enabled: true` are both required — the chart
+# checks them independently.
+
+profile: ambient
+
+cni:
+  ambient:
+    enabled: true
+  # Run the CNI installer on every node (DaemonSet). Including the system
+  # node pool — Istio doesn't need it there in our setup (no workloads run
+  # on system pool), but having it everywhere means moving a workload via
+  # node selector "just works".
+  excludeNamespaces:
+    - kube-system
+    - argocd
+
+global:
+  hub: docker.io/istio
+  tag: 1.24.2
+
+# The CNI installer is itself a DaemonSet running as a privileged container
+# briefly — required to write /etc/cni/net.d. Trade-off accepted: this is
+# how every CNI plugin works (Azure CNI itself does the same).
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 256Mi

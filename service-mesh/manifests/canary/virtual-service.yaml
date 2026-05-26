@@ -1,0 +1,30 @@
+# VirtualService — the canary 90/10 traffic split.
+#
+# The waypoint evaluates this for every HTTP request bound for the
+# `sample-app` Service:
+#   - 90% of requests → v1 subset (stable)
+#   - 10% of requests → v2 subset (canary)
+#
+# To promote v2 in production, the SRE flips the weights to 50/50, then
+# 0/100. The Application uses ArgoCD's GitOps reconciliation: the weight
+# change is a commit, not a kubectl apply.
+
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: sample-app
+  namespace: sample-app
+spec:
+  hosts:
+    - sample-app.sample-app.svc.cluster.local
+  http:
+    - name: canary-split
+      route:
+        - destination:
+            host: sample-app.sample-app.svc.cluster.local
+            subset: v1
+          weight: 90
+        - destination:
+            host: sample-app.sample-app.svc.cluster.local
+            subset: v2
+          weight: 10

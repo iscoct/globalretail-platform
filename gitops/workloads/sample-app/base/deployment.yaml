@@ -5,11 +5,16 @@ metadata:
   labels:
     app.kubernetes.io/name: sample-app
     app.kubernetes.io/part-of: globalretail
+    # `version` is the subset key the DestinationRule (Layer 6) uses to
+    # carve sample-app into v1/v2 for canary routing. Without this label
+    # on the pods, the VirtualService 90/10 split has nothing to match.
+    version: v1
 spec:
   replicas: 2
   selector:
     matchLabels:
       app.kubernetes.io/name: sample-app
+      version: v1
   strategy:
     type: RollingUpdate
     rollingUpdate:
@@ -20,6 +25,7 @@ spec:
       labels:
         app.kubernetes.io/name: sample-app
         app.kubernetes.io/part-of: globalretail
+        version: v1
         # This label is what the Workload Identity webhook looks for. With
         # it, AND a SA whose annotation points to a UAMI client_id, AND
         # AKS having `workload_identity_enabled = true` (Layer 1), the

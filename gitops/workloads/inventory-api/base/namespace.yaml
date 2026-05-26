@@ -5,3 +5,6 @@ metadata:
   labels:
     app.kubernetes.io/managed-by: argocd
     app.kubernetes.io/part-of: globalretail
+    # Layer 6 — enrol this namespace in the Ambient mesh. Same mechanism
+    # as sample-app: existing pods need rollout restart after labelling.
+    istio.io/dataplane-mode: ambient
