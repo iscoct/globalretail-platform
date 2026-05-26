@@ -65,7 +65,10 @@ spec:
               value: "3000"
             # APP_VERSION and APP_COMMIT are read by the /version endpoint.
             # The overlay can patch these per-env (e.g., to the deployed SHA).
-            #
+            # Layer 6 sets this explicitly to "1.0.0" so the canary demo
+            # output reads "1.0.0" vs "2.0.0" rather than "dev" vs "2.0.0".
+            - name: APP_VERSION
+              value: "1.0.0"
             # WELCOME_MESSAGE_FILE points at the path where the CSI driver
             # mounts the Key Vault secret. The app reads from this file
             # at request time so secret rotations (when enabled) are
