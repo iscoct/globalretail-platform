@@ -1,3 +1,14 @@
+# Layer 4 / 4b — Observability
+
+> This folder hosts TWO parallel observability stacks. Pick by use case; production teams often run BOTH.
+>
+> | | Path | What it is |
+> |---|---|---|
+> | **Layer 4** | This README + `kube-prometheus-stack/` + `manifests/` | In-cluster Prometheus + Alertmanager + Grafana via Helm + Kustomize, delivered by Layer 3's ArgoCD |
+> | **Layer 4b** | [`azure-managed/`](./azure-managed/) | Azure Monitor Workspace (Managed Prometheus) + Azure Managed Grafana. Same `ServiceMonitor` instrumentation — different backend + UI |
+>
+> Detailed comparison + when-to-pick-which lives in `azure-managed/README.md` §2 and §4.
+
 # Layer 4 — Observability (kube-prometheus-stack + custom resources)
 
 > 🚧 **Status:** in progress. §6 Pitfalls is `[TBD-AFTER-BUILD]` and gets filled in once the layer is deployed end-to-end on the cluster.

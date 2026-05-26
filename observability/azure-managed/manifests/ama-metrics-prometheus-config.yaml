@@ -1,0 +1,51 @@
+# Custom Prometheus scrape config for the ama-metrics agent.
+#
+# Out of the box, ama-metrics scrapes only the K8s control plane (etcd,
+# apiserver, kubelet, cAdvisor, kube-state-metrics) and node-exporter.
+# It does NOT auto-discover `ServiceMonitor` CRs the way the in-cluster
+# prometheus-operator does — those are a kube-prometheus-stack concept
+# that ama-metrics doesn't speak.
+#
+# To make Managed Prometheus also scrape our sample-app's /metrics, we
+# define a custom Prometheus scrape_config and put it in the
+# `ama-metrics-prometheus-config` ConfigMap (a well-known name the
+# ama-metrics agent reads on startup). The scrape_config below is a
+# standard kubernetes_sd_configs job that:
+#   - discovers Service endpoints in the `sample-app` namespace
+#   - keeps only those whose service name matches `sample-app`
+#   - keeps only the port named `http`
+# Net effect: every 30s ama-metrics scrapes the sample-app pods' /metrics
+# endpoint and forwards the result to the Monitor Workspace.
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ama-metrics-prometheus-config
+  namespace: kube-system
+data:
+  prometheus-config: |-
+    scrape_configs:
+    - job_name: sample-app
+      scheme: http
+      metrics_path: /metrics
+      scrape_interval: 30s
+      kubernetes_sd_configs:
+        - role: endpoints
+          namespaces:
+            names:
+              - sample-app
+      relabel_configs:
+        # Keep only endpoints owned by the `sample-app` Service.
+        - source_labels: [__meta_kubernetes_service_name]
+          action: keep
+          regex: sample-app
+        # Keep only the port named `http` (port 80 → pod 3000).
+        - source_labels: [__meta_kubernetes_endpoint_port_name]
+          action: keep
+          regex: http
+        # Carry the pod name as a label on every series.
+        - source_labels: [__meta_kubernetes_pod_name]
+          target_label: pod
+        # Carry the namespace.
+        - source_labels: [__meta_kubernetes_namespace]
+          target_label: namespace

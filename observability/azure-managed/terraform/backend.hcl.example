@@ -1,0 +1,7 @@
+resource_group_name  = "rg-tfstate-globalretail-weu"
+storage_account_name = ""
+container_name       = "tfstate"
+key                  = "observability/dev/terraform.tfstate"
+use_azuread_auth     = true
+subscription_id      = ""
+tenant_id            = ""
