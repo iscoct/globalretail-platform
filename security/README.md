@@ -225,7 +225,69 @@ We document the per-workload-UAMI pattern via Terraform; what we don't do (yet) 
 
 ## 6. Pitfalls and gotchas
 
-`[TBD-AFTER-BUILD]` — filled in after the first end-to-end test.
+Six pitfalls hit during the 2026-05-25 / 2026-05-26 end-to-end run.
+
+### 6.1 Kyverno policy `validate.message` cannot reference `{{element.name}}` outside `foreach`
+**Symptom:** Kyverno's admission webhook rejects the policy at apply time with
+`'element.name' present outside of foreach at path /validate/message`.
+**Cause:** The `message:` field at `spec.rules[].validate.message` is only used when `foreach` is NOT in play. When you use `foreach`, the message has to live INSIDE the foreach block — because `element` is only defined inside the loop.
+**Fix:** Move the `message:` field into each `foreach[]` element. Or remove the top-level message (Kyverno's default error text still names the policy + rule, useful enough for the lab).
+
+### 6.2 Kyverno's defaulting webhook fills in spec fields → ArgoCD sees endless drift
+**Symptom:** After installing Kyverno + ClusterPolicies, the `kyverno` Application stays `OutOfSync` forever. Every refresh shows the policies as drifted.
+**Cause:** Kyverno's defaulting webhook fills in `spec.admission: true`, `spec.emitWarning: false`, per-rule `skipBackgroundRequests: true`, and `validate.allowExistingViolations: true` on every ClusterPolicy after our YAML is applied. ArgoCD then diffs "what's in git (no field)" vs "what's in cluster (field set)", sees a delta, marks OutOfSync, and selfHeal tries to remove the field → Kyverno re-injects it → loop.
+**Fix:** Add `ignoreDifferences` to the kyverno Application for those specific jq paths + `RespectIgnoreDifferences=true` in syncOptions so selfHeal honours the ignore list:
+```yaml
+ignoreDifferences:
+  - group: kyverno.io
+    kind: ClusterPolicy
+    jqPathExpressions:
+      - .spec.admission
+      - .spec.emitWarning
+      - .spec.rules[].skipBackgroundRequests
+      - .spec.rules[].validate.allowExistingViolations
+syncOptions:
+  - RespectIgnoreDifferences=true
+```
+
+### 6.3 Distroless `nonroot` user + Kyverno `require-runasnonroot` audit warning
+**Observation:** Even though the sample-app's deployment sets `runAsNonRoot: true` and `runAsUser: 65532` at the CONTAINER securityContext level, the `require-runasnonroot` policy still emits PolicyViolation warnings against the pod. The policy looks for `spec.securityContext.runAsNonRoot` at the POD level (or every initContainer too).
+**Cause:** The policy's `anyPattern` uses two patterns: pod-level OR ALL containers including initContainers. We set it only on the container, and we have no initContainers, so the second pattern's `initContainers: [{...}]` matches "must exist with these properties" — but we have no initContainers, so the pattern fails. The first pattern wants `pod-level securityContext.runAsNonRoot` which we don't set.
+**Fix:** In Audit mode this is informational, not blocking — PolicyReports get emitted. For Enforce mode either (a) add the field to the pod-level `spec.securityContext`, or (b) tighten the policy's anyPattern. We left it as-is for the lab because the violation is exactly the kind of "Audit caught a real misconfiguration" example we want students to see.
+
+### 6.4 CodeQL flagged a test using `Date.now()` for a temp filename
+**Symptom:** PR 20 (sample-app `/version` reads secret) blocked from merge with a "CodeQL / Insecure temporary file" review comment on the test that did `path.join(os.tmpdir(), \`welcome-message-${Date.now()}\`)`.
+**Cause:** `Date.now()`-derived temp paths are predictable. CodeQL's `js/insecure-temporary-file` rule flags them because an attacker who can write to /tmp could pre-create a symlink at the predictable path, hijacking the file.
+**Fix:** Use `fs.mkdtempSync(prefix)` which creates a directory with a kernel-randomised suffix and 0700 perms before returning the path — no TOCTOU window. The fix is a one-line change but worth noting: even test code that touches /tmp gets scanned, and the fix is the same as for production code.
+
+### 6.5 Trivy SARIF alerts persist in the GitHub Security tab even with `.trivyignore` in CI
+**Symptom:** PR 20 was blocked by a "CodeQL" status check showing "1 high severity security vulnerability" (and more). The alerts were the libssl3 OS CVEs we documented in Layer 2 (`cicd/README.md §6.2`) and explicitly ignored in `apps/sample-app/.trivyignore`.
+**Cause:** Our two-step Trivy flow (cicd/README.md §6.3) splits scan into "SARIF upload (no gate)" and "table-format gate (with ignorefile)". The SARIF upload step honours severity filtering but NOT `.trivyignore` — by design, because the Security tab is supposed to show ALL findings. So the alerts always show up in the Security tab, and GitHub's branch-protection-friendly "CodeQL" status check goes RED when any unresolved alerts are present on the PR's introduced code.
+**Fix:** Dismiss the alerts via the code-scanning API with `state=dismissed`, `dismissed_reason="won't fix"`, and a comment linking to the Trivy ignore (`gh api PATCH .../alerts/<n> --field state=dismissed ...`). After dismissal, push a fresh commit (or rerun the workflow) so the CodeQL status check re-evaluates — it doesn't refresh automatically.
+
+### 6.6 SecretProviderClass needs explicit `clientID` to use Workload Identity
+**Symptom:** Pod stuck in `ContainerCreating` with
+`MountVolume.SetUp failed for volume "secrets-store": ... failed to build auth config for mode None: failed to get credentials, nodePublishSecretRef secret is not set`
+**Cause:** The Azure CSI Secrets Store provider does NOT auto-detect Workload Identity from the pod's ServiceAccount annotation. The `azure.workload.identity/client-id` annotation tells the WI webhook what UAMI to inject env vars for, but the CSI provider treats authentication mode as a SecretProviderClass parameter — and "no parameter → mode None → can't authenticate".
+**Fix:** Add `clientID: <workload-uami-client-id>` to the SecretProviderClass `parameters` block. Same value as the SA annotation.
+
+### 6.7 CSI Secrets Store Driver needs `tokenRequests` audience for Workload Identity
+**Symptom:** After fixing 6.6, the mount failed with a different error:
+`failed to parse workload identity tokens, error: service account tokens not found`
+**Cause:** The CSI driver and the Azure provider live in DIFFERENT pods (separate DaemonSets). When the driver mounts a volume for a workload pod, it needs to *forward* the workload pod's projected SA token to the provider — but only if the driver has been configured to request tokens for that audience via its `tokenRequests` setting. Without it, the driver doesn't request the token, the provider has nothing to authenticate with.
+**Fix:** Add to the driver's Helm values:
+```yaml
+tokenRequests:
+  - audience: api://AzureADTokenExchange
+```
+After re-applying the chart, the CSIDriver resource (a cluster-scoped K8s object) gets `spec.tokenRequests` populated. The audience MUST be exactly `api://AzureADTokenExchange` — the same audience the workload UAMI's federated credential matches on.
+
+### 6.8 ArgoCD schema-diff error on the CSIDriver `spec.serviceAccountTokenInSecrets` field
+**Symptom:** After 6.7 ships, the `secrets-store-csi-driver` Application's status goes to `Unknown` with
+`Failed to compare desired state to live state: failed to calculate diff: error building typed value from config resource: .spec.serviceAccountTokenInSecrets: field not declared in schema`
+**Cause:** The CSIDriver K8s resource has a `spec.serviceAccountTokenInSecrets` field that varies by Kubernetes version. ArgoCD's cached OpenAPI schema disagrees with what the chart renders, and the structured-merge-diff library refuses to compute a diff for an unknown field.
+**Fix (workaround):** Add `Replace=true` to the Application's syncOptions. That makes ArgoCD use `kubectl replace` semantics for the resource, bypassing the typed-diff path. The Application may still show `Unknown` because the diff *display* still fails — but the apply itself succeeds. The CSIDriver is functional regardless of ArgoCD's diff status.
+**Fix (cleaner):** kubectl-patch the CSIDriver directly to add `spec.tokenRequests` while accepting the ArgoCD diff failure as cosmetic. The Application stays `Unknown` but the runtime state is correct. This is the operational reality of running ArgoCD against fast-moving upstream CRDs/resources.
 
 ## 7. Likely student questions and answers
 
@@ -306,11 +368,48 @@ If your app caches at startup, see §5.9.
 
 ## Build progress
 
-- [ ] Iteration 1: code drafted (Terraform + Kyverno values + 4 policies + CSI driver values + 3 Applications)
-- [ ] Iteration 2: PR 1 — apply Terraform from laptop, merge gitops PR, Kyverno + CSI Applications converge Healthy
-- [ ] Iteration 3: PR 2 — sample-app SA + SPC + Deployment change, /version returns the KV secret value
-- [ ] §6 Pitfalls filled
+- [x] Iteration 1: code drafted (Terraform + Kyverno values + 4 policies + CSI driver values + 3 Applications)
+- [x] Iteration 2: PR 17 — security/terraform/ applied (workload UAMI + fed cred + KV secret); Kyverno + CSI Applications converged
+- [x] Iteration 3: PR 20 — sample-app SA + SPC + Deployment change; /version returns the KV secret via Workload Identity
+- [x] §6 Pitfalls filled (8 hit during the end-to-end run)
+- [ ] Iteration 4: teardown verification
+- [ ] Demo prepared for class
 
 ## Iteration log
 
-`[TBD-AFTER-BUILD]` — appended after each iteration.
+### Iteration 1 — code drafted (2026-05-25)
+Wrote `security/terraform/` (workload UAMI + federated credential targeting `sample-app/sample-app` + Key Vault Secrets User on Layer 1's KV + demo secret). Wrote `security/kyverno/values.yaml` + 4 ClusterPolicies (in Audit mode). Wrote `security/secrets-store-csi/values-driver.yaml` + `values-azure.yaml`. Wrote 3 new ArgoCD Applications. Sub-README §1–§5, §7, §8.
+
+### Iteration 2 — PR 17, security infra (2026-05-25)
+- `terraform apply` in security/terraform/: 5 resources (RG, UAMI, federated credential, KV role assignment, KV secret).
+- `workload_identity_client_id` output noted: `62cc370a-e14b-4f32-8b20-e22d9acd2944`.
+- PR 17 merged. Pitfall 6.1 (Kyverno foreach.message) discovered + fixed via PR 18.
+- Pitfall 6.2 (Kyverno defaulting webhook drift) discovered + fixed via PR 19 (added ignoreDifferences).
+- Kyverno + secrets-store-csi-driver + csi-secrets-store-provider-azure all Applications converged Healthy. ClusterPolicies all `Ready: True`. The 4 audit policies emit PolicyReports against kube-prometheus-stack, ArgoCD, and (later) sample-app — exactly the "audit caught real violations" pedagogical moment.
+
+### Iteration 3 — PR 20, sample-app wiring (2026-05-26)
+- Modified `gitops/workloads/sample-app/base/`: added serviceaccount.yaml + secret-provider-class.yaml, updated deployment.yaml (label + SA + CSI volume mount), updated kustomization.yaml.
+- Modified `apps/sample-app/src/index.js`: read `/mnt/secrets/welcome-message` at request time, return in `/version`. Added 4 tests (10 total, 100% statements).
+- PR 20 blocked by pitfall 6.4 (CodeQL flagged `Date.now()` temp filename) and pitfall 6.5 (stale Trivy alerts in Security tab blocking the merge gate). Fixed test + dismissed alerts via the code-scanning API.
+- Pitfall 6.6 (missing `clientID` in SPC) discovered + fixed via PR 21.
+- Pitfall 6.7 (missing `tokenRequests` on CSI driver) discovered + fixed via PR 22 (chart values) + direct CSIDriver patch (since ArgoCD's diff failed due to pitfall 6.8).
+- Pitfall 6.8 (ArgoCD schema-diff error on CSIDriver field) discovered. Workaround: `Replace=true` syncOption + direct kubectl-patch. CSI driver Application remains `Unknown` in ArgoCD UI; the runtime state is correct.
+
+**End-to-end test verified:**
+```
+curl http://localhost:8082/version
+{
+  "name": "globalretail-sample-app",
+  "version": "dev",
+  "commit": "unknown",
+  "welcome_message": "hello-from-key-vault-via-workload-identity"
+}
+```
+The entire chain works: pod's projected SA token → CSI driver requests it via TokenRequest API → Azure provider receives token + SPC clientID → Entra ID STS exchanges for workload UAMI's access token → Key Vault RBAC (`Key Vault Secrets User`) → secret value → file in /mnt/secrets/ → JSON response. Zero K8s Secret, zero client_secret, pure OIDC federation.
+
+**State at end of iteration 3:**
+- 6 ArgoCD Applications (root, sample-app, observability, kyverno, secrets-store-csi-driver, csi-secrets-store-provider-azure). Two carry diff issues that are functionally harmless (kyverno OutOfSync briefly during sync attempts, secrets-store-csi-driver Unknown forever — both documented above).
+- Kyverno admission webhook running, 4 ClusterPolicies in Audit. PolicyReports queryable via `kubectl get policyreport -A`.
+- CSI Secrets Store Driver + Azure provider DaemonSets healthy on each node; tokenRequests configured for the WI audience.
+- sample-app pods running with the CSI mount, serving the welcome_message from Key Vault.
+- Six total UAMIs in the subscription: AKS control plane + kubelet (Layer 1), CI app + CI platform-RO + CI platform-RW (Layer 2), and the sample-app workload UAMI (Layer 5). Each scoped to least privilege.
