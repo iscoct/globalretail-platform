@@ -214,25 +214,73 @@ To see the split, the client must be IN the mesh. The `mesh-test` namespace runs
 
 This is also true in production: testing canary-routing logic from outside the cluster requires going through your Istio Gateway, not directly to the Service.
 
-## 6. Pitfalls (filled in after end-to-end test)
+## 6. Pitfalls
 
-`[TBD-AFTER-BUILD — will be populated with the specific failure modes we hit while wiring this up: chart version mismatches, CRD ordering, AuthZ accidentally blocking the kubelet probe, etc.]`
-
-Predicted high-likelihood candidates:
+Confirmed during end-to-end test on 2026-05-26.
 
 ### 6.1 The sample-app v1 Deployment's selector changed — Deployment field is immutable
 
-We added `version: v1` to the pod template labels AND to `spec.selector.matchLabels` on sample-app's v1 Deployment, so v1 owns only v1 pods and v2 owns only v2 pods. But `spec.selector` is an immutable field on a `Deployment` — ArgoCD's apply will fail with `field is immutable` and the Application stays OutOfSync.
+We added `version: v1` to the pod template labels AND to `spec.selector.matchLabels` on sample-app's v1 Deployment, so v1 owns only v1 pods and v2 owns only v2 pods. But `spec.selector` is an immutable field on a `Deployment` — ArgoCD's apply fails with:
+
+```
+Deployment.apps "sample-app" is invalid: spec.selector: Invalid value:
+  {"matchLabels":{"app.kubernetes.io/name":"sample-app","version":"v1"}}:
+  field is immutable.
+```
+
+The sample-app Application stays OutOfSync until the operator intervenes.
 
 **Fix:** one-time manual `kubectl delete deployment sample-app -n sample-app`. ArgoCD selfHeal recreates it within ~60s with the new selector. Two ways to avoid the manual step:
 - Annotate the Deployment with `argocd.argoproj.io/sync-options: Force=true,Replace=true` so ArgoCD always uses `kubectl replace --force`. Heavier for unrelated edits.
 - Vendor v1 under a new name (`sample-app-v1`) and delete the old one — same as the manual delete, just GitOps-driven.
 
-### 6.2 Kiali shows nothing — `istio_*` metrics absent from Prometheus
+### 6.2 STRICT mesh-wide breaks non-mesh Prometheus scrapes — the biggest gotcha
 
-Kiali queries `istio_requests_total{...}` and friends. These come from ztunnel (L4) and waypoints (L7). If kube-prometheus-stack's Prometheus isn't scraping ztunnel's `:15020/stats/prometheus` endpoint, Kiali's graph stays empty.
+This was the first pitfall we hit after every component came up. Symptom: every Prometheus scrape against sample-app and inventory-api started returning 0 (or `up{} = 0`), Layer 4 dashboards went dark, Managed Prometheus alerts started firing. The ztunnel logs were unambiguous:
 
-**Likely fix:** add a `ServiceMonitor` (or PodMonitor) selecting ztunnel pods. Istio docs ship a sample — needs to be ported into `observability/manifests/`.
+```
+error access connection complete src.workload="prometheus-..."
+  src.namespace="monitoring"
+  dst.workload="sample-app-..."
+  error="connection closed due to policy rejection:
+         explicitly denied by: istio-system/istio_converted_static_strict"
+```
+
+The translation: `PeerAuthentication: STRICT` set on `istio-system` (mesh-wide default) rejects the TCP connection at the ztunnel TLS-handshake layer BEFORE AuthZ is ever evaluated. The Prometheus pod is NOT in the mesh — it has no SPIFFE identity and no mTLS cert — so its plaintext connection is rejected at L4. Our `allow-prometheus-scrape` AuthorizationPolicy never even runs.
+
+**Two viable fixes:**
+1. **Add monitoring + kube-system to the mesh** (so Prometheus + ama-metrics get SPIFFE identities and mTLS) — closer to "zero-trust everywhere" but invasive.
+2. **Override PeerAuthentication to PERMISSIVE for the namespaces that need to be scraped by non-mesh peers** — mesh-wide STRICT still applies, sample-app and inventory-api accept plaintext, AuthZ decides allow/deny per source. This is what we shipped.
+
+The shipped solution lives in `service-mesh/manifests/peer-authentication.yaml`:
+
+```yaml
+# Mesh-wide default STRICT (any new ns starts zero-trust)
+PeerAuthentication name=default namespace=istio-system mtls.mode=STRICT
+# Per-app override PERMISSIVE (so Prometheus can scrape)
+PeerAuthentication name=allow-non-mesh-scrape namespace=sample-app    mtls.mode=PERMISSIVE
+PeerAuthentication name=allow-non-mesh-scrape namespace=inventory-api mtls.mode=PERMISSIVE
+```
+
+### 6.3 L7 fields in an AuthorizationPolicy without a waypoint silently no-op
+
+The first version of our `allow-prometheus-scrape` policy had `to.operation.paths: ["/metrics"]` — we wanted to constrain Prometheus to ONLY hit `/metrics`, not other routes. That's L7 matching. Without a waypoint on inventory-api (we only deployed one for sample-app to drive the canary), ztunnel can't evaluate path-based rules. The policy was loaded but never matched anything, and connections fell back to `default-deny`.
+
+**Fix:** kept policies L4-only (ports, principals, namespaces). When you genuinely need L7 AuthZ (e.g., "allow GET but not POST"), deploy a Waypoint in that namespace — but be aware that traffic now traverses an extra hop.
+
+### 6.4 ArgoCD reports gateway-api-crds + istiod as OutOfSync forever (cosmetic)
+
+Two ArgoCD Applications stay `OutOfSync` even when the underlying resources are healthy and running:
+- `gateway-api-crds` — the CRDs are installed, but ArgoCD's tracking-id labels conflict with the upstream's annotations on `ReferenceGrant`, so it perpetually wants to "apply" a no-op diff.
+- `istiod` — the deployment is Healthy with the right revision, but the chart emits some auxiliary resources (a MutatingWebhookConfiguration with rotating CA bundles) that ArgoCD sees as drift on every reconcile.
+
+Both are cosmetic. The mesh works; Kiali shows the traffic graph; the canary split works. Production cleanup is to add `ignoreDifferences` blocks (like we did for the Kyverno CRDs in Layer 5).
+
+### 6.5 Kiali graph empty until ztunnel `istio_*` metrics get scraped
+
+After the mesh came up, Kiali rendered an empty graph for the first few minutes. The reason: the ztunnel and waypoint pods emit Istio's standard metrics on `:15020/stats/prometheus`, and our kube-prometheus-stack Prometheus didn't have a `PodMonitor` selecting them — so the `istio_requests_total` series stayed empty in Prometheus and Kiali had no data to draw.
+
+**Fix:** add a `PodMonitor` selecting `app=ztunnel` and the waypoint pods, into `observability/manifests/istio/`. (Deferred to a follow-up; the canary demo still proves the routing works via the curl-client logs, but the graph view in Kiali stays sparse until the PodMonitor lands.)
 
 ## 7. Likely student questions
 
