@@ -27,6 +27,17 @@ spec:
         # a projected SA token at AZURE_FEDERATED_TOKEN_FILE.
         azure.workload.identity/use: 'true'
     spec:
+      # Pod-level securityContext so Kyverno's require-runasnonroot policy
+      # (Layer 5) is happy. The policy's anyPattern checks pod-level OR
+      # every-container — the container-level setting is below, but
+      # declaring it ALSO at the pod level eliminates the PolicyReport
+      # noise. The history of WHY we did this is preserved in
+      # security/README.md §6.3 (the original observation about Audit
+      # mode catching real violations).
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
       # AKS kubelet UAMI has AcrPull on the ACR (Layer 1), so no imagePullSecret.
       serviceAccountName: sample-app
       containers:
