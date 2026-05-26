@@ -1,0 +1,240 @@
+# --------------------------------------------------------------------------- #
+# inventory-api CI/CD (Go).
+#
+# Mirrors the SHAPE of app-ci.yml (Node sample-app) but uses Go-specific
+# tooling — same OIDC flow against the App UAMI, same ACR target, same
+# branch-protection guard on the push step.
+#
+# That two apps in different languages share the same identity and registry
+# is the entire point: the platform's CI/CD layer is language-agnostic.
+# --------------------------------------------------------------------------- #
+
+name: inventory-api-ci
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'apps/inventory-api/**'
+      - '.github/workflows/inventory-api-ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'apps/inventory-api/**'
+      - '.github/workflows/inventory-api-ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: inventory-api-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GO_VERSION: '1.25'
+  APP_DIR: apps/inventory-api
+
+jobs:
+  # ------------------------------------------------------------------------- #
+  # Stage 1 — go test (incl. -race) + coverage.
+  # ------------------------------------------------------------------------- #
+  test:
+    name: Unit tests
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: ${{ env.APP_DIR }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: ${{ env.APP_DIR }}/go.sum
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test (with race detector + coverage)
+        run: go test -race -coverprofile=coverage.out -covermode=atomic ./...
+
+      - name: Show coverage summary
+        run: go tool cover -func=coverage.out | tail -5
+
+      - name: Upload coverage artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: inventory-api-coverage
+          path: ${{ env.APP_DIR }}/coverage.out
+          retention-days: 7
+
+  # ------------------------------------------------------------------------- #
+  # Stage 2 — SAST: CodeQL for Go.
+  # ------------------------------------------------------------------------- #
+  sast:
+    name: SAST (CodeQL)
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go (CodeQL needs the toolchain for Go analysis)
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: go
+          queries: security-extended
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+        with:
+          working-directory: ${{ env.APP_DIR }}
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: '/language:go'
+
+  # ------------------------------------------------------------------------- #
+  # Stage 3 — SCA: govulncheck against the module graph.
+  # `govulncheck` is the official Go vulnerability scanner; it reads the
+  # Go vulnerability database and reports findings that actually reach
+  # called code (lower false-positive rate than naive dependency scans).
+  # ------------------------------------------------------------------------- #
+  sca:
+    name: SCA (govulncheck)
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: ${{ env.APP_DIR }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: ${{ env.APP_DIR }}/go.sum
+
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+
+      - name: govulncheck (fail on any reachable vulnerability)
+        run: govulncheck ./...
+
+  # ------------------------------------------------------------------------- #
+  # Stage 4-5 — Build, scan, push to ACR.
+  # ------------------------------------------------------------------------- #
+  build-scan-push:
+    name: Build, scan, push
+    runs-on: ubuntu-24.04
+    needs: [test, sast, sca]
+    permissions:
+      contents: read
+      id-token: write
+      security-events: write
+    env:
+      IMAGE_REPO: globalretail/inventory-api
+      IMAGE_TAG_SHA: sha-${{ github.sha }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image (local tag only)
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ env.APP_DIR }}
+          file: ${{ env.APP_DIR }}/Dockerfile
+          load: true
+          push: false
+          tags: |
+            ${{ env.IMAGE_REPO }}:${{ env.IMAGE_TAG_SHA }}
+            ${{ env.IMAGE_REPO }}:ci
+          cache-from: type=gha,scope=inventory-api
+          cache-to: type=gha,mode=max,scope=inventory-api
+
+      - name: Trivy image scan — SARIF upload (informational)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE_REPO }}:ci
+          format: sarif
+          output: trivy-results.sarif
+          severity: HIGH,CRITICAL
+          exit-code: '0'
+          ignore-unfixed: true
+
+      - name: Upload Trivy SARIF to GitHub Security tab
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results.sarif
+          category: trivy-image-inventory-api
+
+      - name: Trivy image scan — gate (HIGH, CRITICAL = fail)
+        # distroless/static has very few OS-level CVEs (it's literally just
+        # libc + CA certs). If anything HIGH/CRITICAL slips through, this
+        # gate blocks the push. No .trivyignore needed for this image so
+        # far — unlike sample-app/distroless-nodejs which has libssl3.
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE_REPO }}:ci
+          format: table
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+          ignore-unfixed: true
+
+      # ------------- Push to ACR — only on push to main ----------------------
+      - name: Azure login (OIDC, App UAMI)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID_APP }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: ACR login
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: az acr login --name "${{ vars.ACR_NAME }}"
+
+      - name: Tag image with ACR reference
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          docker tag "${IMAGE_REPO}:${IMAGE_TAG_SHA}" "${{ vars.ACR_LOGIN_SERVER }}/${IMAGE_REPO}:${IMAGE_TAG_SHA}"
+          docker tag "${IMAGE_REPO}:${IMAGE_TAG_SHA}" "${{ vars.ACR_LOGIN_SERVER }}/${IMAGE_REPO}:main"
+
+      - name: Push to ACR
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          docker push "${{ vars.ACR_LOGIN_SERVER }}/${IMAGE_REPO}:${IMAGE_TAG_SHA}"
+          docker push "${{ vars.ACR_LOGIN_SERVER }}/${IMAGE_REPO}:main"
+
+      - name: Job summary
+        if: always()
+        run: |
+          {
+            echo "### inventory-api CI"
+            echo ""
+            echo "- Image repo: \`${IMAGE_REPO}\`"
+            echo "- Build tag : \`${IMAGE_TAG_SHA}\`"
+            if [[ "${{ github.event_name }}" == "push" && "${{ github.ref }}" == "refs/heads/main" ]]; then
+              echo "- Pushed to : \`${{ vars.ACR_LOGIN_SERVER }}/${IMAGE_REPO}:${IMAGE_TAG_SHA}\` and \`:main\`"
+            else
+              echo "- Push     : skipped (PR or non-main push)"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
