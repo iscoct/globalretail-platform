@@ -87,7 +87,8 @@ Each layer has its own `README.md` answering eight questions (what it does, why 
 | 1 | Platform foundation (Terraform) | `infra/`  | ✅ Built + tested + teardown verified |
 | 2 | CI/CD with OIDC (GitHub Actions → Azure) | `cicd/` | 🚧 Code drafted, end-to-end test pending |
 | 3 | GitOps delivery (ArgoCD) | `gitops/` | ✅ Built + tested end-to-end (sample-app reconciled via app-of-apps) |
-| 4 | Observability (kube-prometheus-stack + sample-app SLO) | `observability/` | ✅ Built + tested end-to-end (Prometheus scrapes `/metrics`, Grafana dashboard loaded, burn-rate alerts wired) |
+| 4 | Observability — in-cluster (kube-prometheus-stack + sample-app SLO) | `observability/` | ✅ Built + tested |
+| 4b | Observability — Azure-managed (Monitor Workspace + Managed Grafana) | `observability/azure-managed/` | ✅ Built + tested in parallel (same `/metrics`, two backends, two UIs) |
 | 5 | Security (Kyverno + CSI Secrets Store + Workload Identity) | `security/` | ✅ Built + tested end-to-end (sample-app `/version` reads a Key Vault secret via Workload Identity) |
 
 ## How to deploy this in your own Azure subscription
