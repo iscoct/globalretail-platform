@@ -28,3 +28,16 @@ CVE-2026-28387
 CVE-2026-28388
 CVE-2026-28389
 CVE-2026-28390
+
+# libssl3 heap use-after-free in PKCS7_verify() (CVE-2026-45447, CVSS 9.8).
+# Debian shipped the fix as 3.0.20-1~deb12u2, but the
+# gcr.io/distroless/nodejs20-debian12 base has NOT been rebuilt yet.
+# Verified 2026-06-18: the latest base digest (sha256:6fe218db...) still ships
+# libssl3 3.0.18-1~deb12u2, so a `docker build --pull` does NOT clear it.
+# Distroless has no package manager, so there is no Dockerfile-level patch we
+# can apply — we are blocked on the upstream rebuild.
+# Why low risk here: sample-app is an HTTP service that never calls
+# PKCS7_verify()/processes S/MIME, so the vulnerable code path is unreachable.
+# Track upstream rebuild: https://github.com/GoogleContainerTools/distroless/releases
+# Re-check quarterly and REMOVE this line once the distroless rebuild lands.
+CVE-2026-45447
