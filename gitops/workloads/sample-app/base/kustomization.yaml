@@ -1,0 +1,28 @@
+# Base kustomization for the sample-app.
+#
+# This base contains the env-agnostic shape of the workload: a Deployment,
+# a Service, and a Namespace. Per-environment overlays under ../overlays/
+# add what differs between dev/staging/prod — replicas, image registry,
+# resource limits, env vars.
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Resources read in declaration order; namespace first so the others land
+# in it cleanly.
+resources:
+  - namespace.yaml
+  - serviceaccount.yaml          # Workload Identity binding (Layer 5)
+  - secret-provider-class.yaml   # CSI Secrets Store config (Layer 5)
+  - deployment.yaml              # v1 of the app
+  - deployment-v2.yaml           # v2 — the canary target (Layer 6)
+  - service.yaml
+
+# Common labels applied to every resource. Kustomize-managed labels show up
+# on each resource AND on each Deployment's pod template, so kubectl get
+# pods -l app.kubernetes.io/part-of=globalretail finds the workloads.
+labels:
+  - includeSelectors: false
+    pairs:
+      app.kubernetes.io/part-of: globalretail
+      app.kubernetes.io/managed-by: argocd

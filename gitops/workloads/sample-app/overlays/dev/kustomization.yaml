@@ -1,0 +1,37 @@
+# Dev overlay for the sample-app.
+#
+# The base ships an env-agnostic Deployment+Service. This overlay does the
+# things that are specific to *this* environment:
+#   - Rewrites the image to the real ACR-prefixed coordinate + mutable :main tag.
+#   - Sets the namespace (also done in the base, but explicit here makes
+#     "what gets where" obvious in a multi-overlay setup).
+#
+# When we add staging/prod overlays later, they will rewrite the image to
+# their own registry + (likely) immutable SHA tags, and may scale replicas
+# differently.
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: sample-app
+
+resources:
+  - ../../base
+
+# Image rewrite. The base uses the logical name `globalretail/sample-app`;
+# the overlay points it at the actual ACR.
+#
+# IMPORTANT: if you forked the repo and bootstrapped Layer 1 in your own
+# Azure subscription, your ACR has a different random suffix. Edit this
+# block — or, better, parameterise it via a kustomize component or a
+# generator (a future refactor).
+images:
+  - name: globalretail/sample-app
+    newName: acrglobalretaildevweu389ce1.azurecr.io/globalretail/sample-app
+    newTag: main
+
+# Env label for filtering: `kubectl get pods -A -l environment=dev`.
+labels:
+  - includeSelectors: false
+    pairs:
+      environment: dev

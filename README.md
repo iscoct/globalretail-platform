@@ -58,16 +58,19 @@ globalretail-platform/
 ├── .github/
 │   ├── dependabot.yml                 ← weekly dep + image + actions bumps
 │   └── workflows/
-│       ├── app-ci.yml                 ← App pipeline: test → SAST → SCA → build → scan → push
+│       ├── app-ci.yml                 ← sample-app (Node): test → SAST → SCA → build → scan → push
+│       ├── inventory-api-ci.yml       ← inventory-api (Go): same shape, Go-specific tooling
 │       ├── infra-plan.yml             ← Terraform plan on PR (Platform-RO UAMI)
 │       └── infra-apply.yml            ← Terraform apply on push to main (env-gated)
 ├── infra/                             ← Layer 1 — Platform foundation (Terraform)
 ├── cicd/                              ← Layer 2 — CI/CD with OIDC
 ├── apps/
-│   └── sample-app/                    ← Tiny Node.js app exercising the app pipeline
+│   ├── sample-app/                    ← Node.js — exercises the platform end-to-end
+│   └── inventory-api/                 ← Go — proves the platform is language-agnostic
 ├── gitops/                            ← Layer 3 — GitOps delivery (ArgoCD)
-├── observability/                     ← Layer 4 — Monitoring, logging, tracing
-└── security/                          ← Layer 5 — Policy, secrets, scanning
+├── observability/                     ← Layer 4 + 4b — Monitoring (in-cluster + Azure-managed in parallel)
+├── security/                          ← Layer 5 — Policy, secrets, scanning
+└── service-mesh/                      ← Layer 6 — Istio Ambient + canary demo + Kiali
 ```
 
 The folder names are flat and unprefixed on purpose — this is what a platform team's monorepo looks like in a real company. The reading order is captured in the layer table below.
@@ -86,9 +89,12 @@ Each layer has its own `README.md` answering eight questions (what it does, why 
 |---|-------|--------|--------|
 | 1 | Platform foundation (Terraform) | `infra/`  | ✅ Built + tested + teardown verified |
 | 2 | CI/CD with OIDC (GitHub Actions → Azure) | `cicd/` | 🚧 Code drafted, end-to-end test pending |
-| 3 | GitOps delivery (ArgoCD) | `gitops/` | ⏳ Not started |
-| 4 | Observability (Prometheus, Grafana, Azure Monitor) | `observability/` | ⏳ Not started |
-| 5 | Security (Kyverno, Trivy, Workload Identity, Key Vault CSI) | `security/` | ⏳ Not started |
+| 3 | GitOps delivery (ArgoCD) | `gitops/` | ✅ Built + tested end-to-end (sample-app reconciled via app-of-apps) |
+| 4 | Observability — in-cluster (kube-prometheus-stack + sample-app SLO) | `observability/` | ✅ Built + tested |
+| 4b | Observability — Azure-managed (Monitor Workspace + Managed Grafana) | `observability/azure-managed/` | ✅ Built + tested in parallel (same `/metrics`, two backends, two UIs) |
+| 5 | Security (Kyverno + CSI Secrets Store + Workload Identity) | `security/` | ✅ Built + tested end-to-end (sample-app `/version` reads a Key Vault secret via Workload Identity) |
+| — | **Second workload: `inventory-api` (Go)** | `apps/inventory-api/` | ✅ Built + tested — same CI/CD, GitOps, observability, Kyverno policies as `sample-app`, in a different language. Both backends see identical metric values. |
+| 6 | Service mesh (Istio Ambient + Kiali + canary demo) | `service-mesh/` | ✅ Built + tested end-to-end (canary 90/10 split visible via in-mesh curl-client, cross-app zero-trust posture verified) |
 
 ## How to deploy this in your own Azure subscription
 

@@ -27,7 +27,8 @@ on:
   push:
     branches: [main]
     paths:
-      - 'infra/**'
+      # `infra/**` intentionally absent — Layer 1 apply runs from a laptop
+      # until refactor. See cicd/README.md §6.
       - 'cicd/terraform/**'
       - '.github/workflows/infra-apply.yml'
   workflow_dispatch:
@@ -53,11 +54,14 @@ jobs:
     environment: platform-prod
     strategy:
       fail-fast: true
-      max-parallel: 1   # apply layers sequentially, layer 1 → layer 2
+      max-parallel: 1
       matrix:
         layer:
-          - { name: layer1-infra,        dir: infra,           backend_key: infra/dev/terraform.tfstate, order: 1 }
-          - { name: layer2-cicd,         dir: cicd/terraform,  backend_key: cicd/dev/terraform.tfstate,  order: 2 }
+          # See infra-plan.yml for why layer1-infra is NOT in the CI matrix.
+          # tl;dr: Layer 1's azuread_group uses dynamic client-config
+          # references that resolve to the UAMI under CI, producing a phantom
+          # diff the UAMI cannot apply. Layer 1 stays laptop-only.
+          - { name: layer2-cicd, dir: cicd/terraform, backend_key: cicd/dev/terraform.tfstate, order: 1 }
     defaults:
       run:
         working-directory: ${{ matrix.layer.dir }}
@@ -97,11 +101,11 @@ jobs:
           tenant_id       = "${{ vars.AZURE_TENANT_ID }}"
           owner           = "${{ vars.OWNER_TAG }}"
           EOF
-          if [ "${{ matrix.layer.dir }}" = "infra" ]; then
-            # CI cannot create Entra ID groups (no tenant permissions). The
-            # bootstrap step creates the group; CI must NOT try to manage it.
-            echo 'create_aks_admin_group = false' >> terraform.tfvars
-          fi
+          # NOTE: `create_aks_admin_group` keeps its default of `true` here.
+          # The group was created by the laptop apply and is in the state.
+          # We pass `-refresh=false` below so the CI UAMIs (which lack Entra
+          # ID directory permissions) never try to read the group via the
+          # azuread provider — the state's last-known values are used as-is.
           if [ "${{ matrix.layer.dir }}" = "cicd/terraform" ]; then
             cat >> terraform.tfvars <<EOF
           layer1_tfstate_storage_account = "${{ vars.TFSTATE_STORAGE_ACCOUNT }}"
@@ -117,7 +121,11 @@ jobs:
         run: terraform validate
 
       - name: Terraform plan (out=tfplan)
-        run: terraform plan -input=false -out=tfplan
+        # -refresh=false: CI UAMIs have Azure RBAC, NOT Entra ID directory
+        # permissions. Any `azuread_*` resource in state would 403 during
+        # refresh. Plan uses last known state values; drift detection is the
+        # laptop's job, not CI's.
+        run: terraform plan -input=false -refresh=false -out=tfplan
 
       - name: Terraform apply
         run: terraform apply -input=false -auto-approve tfplan

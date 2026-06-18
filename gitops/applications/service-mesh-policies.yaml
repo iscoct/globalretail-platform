@@ -1,0 +1,40 @@
+# Service-mesh policies + canary demo.
+#
+# All resources that depend on Istio CRDs being installed (sync-waves -10
+# through 5). Bundles three concerns:
+#   1. PeerAuthentication: STRICT mTLS mesh-wide.
+#   2. AuthorizationPolicy: default-deny per namespace + explicit allows.
+#   3. Canary demo: waypoint Gateway + DestinationRule + VirtualService for
+#      sample-app v1/v2 90:10 traffic split, plus an in-mesh curl client.
+#
+# sync-wave: 10 — last in the Layer 6 chain.
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: service-mesh-policies
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "10"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/iscoct/globalretail-platform
+    targetRevision: main
+    path: service-mesh/manifests
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: istio-system
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ApplyOutOfSyncOnly=true
+      - ServerSideApply=true

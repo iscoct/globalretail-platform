@@ -1,0 +1,25 @@
+# Helm values for the Azure Key Vault Provider for Secrets Store CSI Driver.
+# Repo: https://azure.github.io/secrets-store-csi-driver-provider-azure
+#
+# This provider is what makes the driver actually fetch from Azure Key Vault
+# using Workload Identity. It runs as a DaemonSet pod alongside the driver
+# pod on each node and exposes a gRPC unix socket.
+
+linux:
+  resources:
+    requests:
+      memory: 64Mi
+      cpu: 50m
+    limits:
+      memory: 128Mi
+      cpu: 200m
+
+# The provider authenticates to Azure via Workload Identity. The driver
+# project an SA token into the SecretProviderClass-consuming pod; the
+# provider's pod is just a relay.
+#
+# secrets-store: tells the chart this is the WORKLOAD-IDENTITY-aware
+# variant (vs the older managed-identity / service-principal modes that
+# we don't need on a Workload Identity-enabled cluster).
+secrets-store-csi-driver:
+  install: false   # we install the driver separately (see values-driver.yaml)

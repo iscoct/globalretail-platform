@@ -1,0 +1,30 @@
+# ztunnel Helm chart values.
+#
+# ztunnel ("zero-trust tunnel") is the Ambient mode L4 data plane. It runs as
+# a DaemonSet — one pod per node — and handles:
+#   - mTLS for all traffic between Ambient-enabled pods (auto-negotiated via
+#     HBONE, Istio's HTTP/2-CONNECT tunnel)
+#   - L4 AuthorizationPolicy enforcement (deny/allow by SA + port)
+#   - Telemetry emission for L4 connections
+#
+# For L7 (HTTP routing, headers, retries, host-based AuthZ), a separate
+# Waypoint proxy is deployed per namespace or per SA. ztunnel does NOT do L7.
+#
+# ztunnel is written in Rust — the ~30MB binary replaces the per-pod Envoy
+# sidecar (~100MB+ each). For a 100-pod namespace, this is a substantial
+# resource saving over sidecar mode.
+
+global:
+  hub: docker.io/istio
+  tag: 1.24.2
+
+# Resources per node-local ztunnel pod. Sized for the dev cluster's traffic
+# (handful of req/s). In production with thousands of req/s per node, bump
+# the limits and watch CPU throttling in Prometheus.
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi

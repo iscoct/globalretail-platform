@@ -1,0 +1,12 @@
+# Kustomize bundle for service-mesh policies + canary demo.
+#
+# Applied as a single ArgoCD Application (service-mesh-policies.yaml) at
+# sync-wave 10, after Istio + ztunnel are running.
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - peer-authentication.yaml
+  - authorization-policies.yaml
+  - canary/

@@ -1,0 +1,153 @@
+# kube-prometheus-stack Helm values (prometheus-community chart).
+#
+# Lab-shaped install. Production differences live in ../README.md §4.
+#
+# Components installed by the chart (all on by default unless overridden):
+#   - prometheus-operator  (CRD reconciler)
+#   - kube-state-metrics   (cluster-wide k8s object metrics)
+#   - node-exporter        (per-node OS metrics, DaemonSet)
+#   - prometheus           (StatefulSet, the actual scraper + tsdb)
+#   - alertmanager         (StatefulSet, alert routing)
+#   - grafana              (Deployment, the UI)
+
+# --- Prometheus -------------------------------------------------------------
+prometheus:
+  # Ingress disabled — green-field cluster has no controller. ClusterIP +
+  # `kubectl port-forward` is the lab access pattern.
+  ingress:
+    enabled: false
+
+  prometheusSpec:
+    # Storage: emptyDir (the chart's default for prometheus). We lose the
+    # time-series db on pod restart. Production uses a PersistentVolumeClaim
+    # on Azure Disk + retention sized to the disk.
+
+    # Retention: 7 days. Enough to see week-long trends without ballooning
+    # the in-memory + disk footprint.
+    retention: 7d
+
+    # Resource sizing. Chart defaults assume a beefier cluster; we trim so
+    # kube-prometheus-stack coexists with sample-app on the user node pool.
+    resources:
+      requests:
+        memory: 400Mi
+        cpu: 100m
+      limits:
+        memory: 800Mi
+        cpu: 500m
+
+    # Discovery — pick up ALL ServiceMonitors / PodMonitors / PrometheusRules
+    # in any namespace, not just the chart's release namespace. This is the
+    # whole point of the operator pattern: a workload owner drops a
+    # ServiceMonitor next to their app and prometheus discovers it. Without
+    # these flags every CR must be labelled with the chart's release name.
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+    probeSelectorNilUsesHelmValues: false
+
+# --- Alertmanager -----------------------------------------------------------
+alertmanager:
+  ingress:
+    enabled: false
+
+  alertmanagerSpec:
+    resources:
+      requests:
+        memory: 64Mi
+        cpu: 25m
+      limits:
+        memory: 128Mi
+        cpu: 100m
+
+  # Lab routing: a placeholder null receiver — the routing shape is
+  # production-like but no real notification is sent. Production replaces
+  # `null-receiver` with a slack_configs entry pointing at an incoming
+  # webhook, or with a pagerduty_configs entry, etc.
+  config:
+    global:
+      resolve_timeout: 5m
+    route:
+      receiver: 'null-receiver'
+      group_by: ['alertname', 'severity']
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 12h
+      routes:
+        # High-severity alerts would normally go to a separate, fast-path
+        # receiver (PagerDuty / on-call Slack). For the lab they still hit
+        # the null receiver — the routing layout is what production uses.
+        - matchers:
+            - severity = "critical"
+          receiver: 'null-receiver'
+          continue: false
+    receivers:
+      - name: 'null-receiver'
+
+# --- Grafana ----------------------------------------------------------------
+grafana:
+  ingress:
+    enabled: false
+
+  # ClusterIP, same access model as ArgoCD's. `kubectl port-forward` from a
+  # workstation that already has cluster access.
+  service:
+    type: ClusterIP
+
+  resources:
+    requests:
+      memory: 100Mi
+      cpu: 50m
+    limits:
+      memory: 200Mi
+      cpu: 200m
+
+  # adminPassword: the chart's default `prom-operator` is fine for the lab.
+  # Production: pull from Key Vault via the CSI Secrets Store (Layer 5), or
+  # disable local auth entirely and wire SSO via grafana.ini [auth.azuread].
+  adminPassword: prom-operator
+
+  # Auto-load dashboards + datasources from labelled ConfigMaps in any
+  # namespace. We use this for the sample-app dashboard under
+  # ../manifests/dashboards/.
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+      labelValue: '1'
+      searchNamespace: ALL
+      folder: /tmp/dashboards
+      provider:
+        foldersFromFilesStructure: true
+    datasources:
+      enabled: true
+      label: grafana_datasource
+      labelValue: '1'
+      searchNamespace: ALL
+
+# --- prometheus-node-exporter ----------------------------------------------
+prometheus-node-exporter:
+  resources:
+    requests:
+      memory: 30Mi
+      cpu: 20m
+    limits:
+      memory: 64Mi
+      cpu: 100m
+
+# --- kube-state-metrics -----------------------------------------------------
+kube-state-metrics:
+  resources:
+    requests:
+      memory: 32Mi
+      cpu: 20m
+    limits:
+      memory: 128Mi
+      cpu: 100m
+
+# --- CRDs ------------------------------------------------------------------
+# Let the chart install the CRDs (ServiceMonitor, PrometheusRule, etc.).
+# Production lifecycle is more careful: CRDs are usually applied separately
+# from the chart so `helm uninstall` doesn't yank them and orphan instances.
+crds:
+  enabled: true

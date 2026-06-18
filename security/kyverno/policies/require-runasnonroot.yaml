@@ -1,0 +1,55 @@
+# Pods MUST set securityContext.runAsNonRoot=true at the POD level (or all
+# containers explicitly).
+#
+# Why: defense in depth against image-level USER misconfiguration. Even if
+# someone publishes an image without a non-root USER directive, the pod
+# spec says "don't start unless non-root" — the kubelet refuses to start
+# the container instead of silently running as root.
+#
+# This is what Layer 3 §6.3 in gitops/README.md taught us: distroless's
+# `USER nonroot` string is rejected by `runAsNonRoot: true` without an
+# explicit numeric `runAsUser`. The policy ENFORCES the pattern.
+
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-runasnonroot
+  annotations:
+    policies.kyverno.io/title: 'Require runAsNonRoot=true on pods'
+    policies.kyverno.io/category: 'Pod Security Standards (Restricted)'
+    policies.kyverno.io/severity: 'high'
+    policies.kyverno.io/subject: 'Pod'
+spec:
+  validationFailureAction: Audit
+  background: true
+  rules:
+    - name: pod-must-runasnonroot
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+      exclude:
+        any:
+          - resources:
+              namespaces:
+                - kube-system
+                - kube-public
+                - kube-node-lease
+                - kyverno
+                - monitoring   # node-exporter again
+                - kube-secrets-store-csi-driver
+      validate:
+        message: 'Pod must set spec.securityContext.runAsNonRoot=true or every container must do it individually.'
+        anyPattern:
+          # Acceptable: pod-level securityContext sets it
+          - spec:
+              securityContext:
+                runAsNonRoot: true
+          # Acceptable: every container sets it
+          - spec:
+              containers:
+                - securityContext:
+                    runAsNonRoot: true
+              initContainers:
+                - securityContext:
+                    runAsNonRoot: true

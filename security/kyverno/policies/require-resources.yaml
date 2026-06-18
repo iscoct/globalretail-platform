@@ -1,0 +1,72 @@
+# Pods MUST declare CPU + memory requests AND limits.
+#
+# Why: a pod without limits can starve its neighbours on the node; a pod
+# without requests is unschedulable in a guaranteed way (the scheduler
+# treats it as needing 0 and packs it tightly, then it gets OOM-killed
+# when a real workload arrives). Both are the single most common cause
+# of "the cluster is fine but somehow the app is slow".
+#
+# Mode: Audit. Failing workloads land in a PolicyReport but are still
+# admitted. Flip `validationFailureAction: Enforce` once you've fixed
+# the known violations in the cluster (kube-prometheus-stack, ArgoCD,
+# Kyverno itself all have at least one container without limits in
+# their default chart values).
+
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-pod-resources
+  annotations:
+    policies.kyverno.io/title: 'Require resource requests + limits on pod containers'
+    policies.kyverno.io/category: 'Resource Management'
+    policies.kyverno.io/severity: 'medium'
+    policies.kyverno.io/subject: 'Pod'
+    policies.kyverno.io/description: |
+      Validates that every container in a Pod declares both CPU and memory
+      requests AND limits. Initiated in Layer 5 of the GlobalRetail
+      reference architecture; documented in security/README.md.
+spec:
+  validationFailureAction: Audit
+  background: true
+  rules:
+    - name: require-resource-requests-limits
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+      # Exclude the system namespaces where the cluster operator owns the
+      # workload set — Kyverno's webhook can't reach kube-system anyway
+      # (failurePolicy excludes), but the exclusion here is what shows up
+      # in PolicyReport, so we keep the noise out.
+      exclude:
+        any:
+          - resources:
+              namespaces:
+                - kube-system
+                - kube-public
+                - kube-node-lease
+                - kyverno
+                - gatekeeper-system
+      validate:
+        foreach:
+          - list: 'request.object.spec.containers'
+            # `message` lives INSIDE the foreach because it references
+            # `element.name`, which is only defined inside the loop.
+            # Putting it at the validate level (where many tutorials show
+            # it) makes Kyverno reject the policy at admission:
+            #   'element.name' present outside of foreach at path /validate/message
+            deny:
+              conditions:
+                any:
+                  - key: '{{ element.resources.requests.cpu || `null` }}'
+                    operator: Equals
+                    value: 'null'
+                  - key: '{{ element.resources.requests.memory || `null` }}'
+                    operator: Equals
+                    value: 'null'
+                  - key: '{{ element.resources.limits.cpu || `null` }}'
+                    operator: Equals
+                    value: 'null'
+                  - key: '{{ element.resources.limits.memory || `null` }}'
+                    operator: Equals
+                    value: 'null'

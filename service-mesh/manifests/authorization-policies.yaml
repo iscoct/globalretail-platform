@@ -1,0 +1,48 @@
+# AuthorizationPolicy — zero-trust authorization between mesh pods.
+#
+# Pedagogical pivot from "default-deny + explicit allow" to
+# "default-allow + explicit deny" for inventory-api.
+#
+# Reason: in Ambient L4 AuthZ, the `source.namespaces` field doesn't
+# reliably match non-mesh sources (Prometheus in monitoring, ama-metrics
+# in kube-system). When ztunnel logs show src.namespace=monitoring but
+# the namespace-keyed ALLOW rule never matches, the policy falls through
+# to the default-deny and Prometheus scrapes break — even on PERMISSIVE
+# PeerAuthentication. This is documented in service-mesh/README.md §6.3c.
+#
+# The cleaner pattern: default-allow with explicit DENY for the
+# principals we want to keep out. Istio's policy precedence is
+# CUSTOM → DENY → ALLOW, so a DENY rule always wins. We DENY
+# `mesh-test/curl-client` (the canary demo client) from reaching
+# inventory-api on port 3000 — that proves the SPIFFE-based identity
+# check works for mesh peers, while non-mesh observability tooling
+# continues to scrape without policy gymnastics.
+#
+# sample-app has no AuthZ at all — see §6.3b (waypoint passthrough).
+
+# ===== inventory-api namespace =====
+#
+# Default is ALLOW (no ALLOW policies in the namespace, only DENY).
+# The DENY below targets exactly one principal: the curl-client in
+# mesh-test. The cross-app demo (sample-app -> inventory-api) is NOT
+# in the deny list, so it works. Prometheus + ama-metrics scrapes are
+# NOT in the deny list either, so they also work.
+
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: deny-mesh-test
+  namespace: inventory-api
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: inventory-api
+  action: DENY
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/mesh-test/sa/curl-client
+      to:
+        - operation:
+            ports: ["3000"]

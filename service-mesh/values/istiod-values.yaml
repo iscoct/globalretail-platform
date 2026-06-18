@@ -1,0 +1,45 @@
+# istiod Helm chart values.
+#
+# istiod is the Istio control plane: xDS server for the data plane (ztunnel
+# in Ambient mode), webhook for Istio CRD validation, root CA for mTLS, and
+# discovery for services in the mesh.
+#
+# `profile: ambient` switches the chart's defaults from sidecar mode to
+# Ambient mode — no sidecar injection webhook, ztunnel-aware config.
+
+profile: ambient
+
+# Accept the licence the istiod chart asks for (Istio 1.24+ requires this
+# to be set explicitly before install).
+global:
+  hub: docker.io/istio
+  tag: 1.24.2
+
+# Mesh-wide defaults. accessLogFile sends Envoy access logs to stdout so we
+# can `kubectl logs -n istio-system deploy/istiod` (or the waypoint pods)
+# and see request-level traffic. In production you'd send these to Loki or
+# Azure Monitor.
+meshConfig:
+  accessLogFile: /dev/stdout
+  # Telemetry: enable the prometheus tracing/metrics integration so the
+  # mesh emits standard metrics (istio_request_total, istio_request_duration,
+  # istio_tcp_*). Kiali reads these.
+  defaultProviders:
+    metrics:
+      - prometheus
+  extensionProviders:
+    - name: prometheus
+      prometheus: {}
+
+# Control-plane resources sized for the dev cluster. istiod is single-replica
+# in dev; production runs at least 3 replicas behind a PDB.
+pilot:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  autoscaleEnabled: false
+  replicaCount: 1

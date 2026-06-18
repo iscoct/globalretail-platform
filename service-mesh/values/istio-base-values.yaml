@@ -1,0 +1,15 @@
+# istio-base Helm chart values.
+#
+# istio-base is the smallest of the four Istio charts. It does two things:
+#   1. Installs the Istio CRDs (Gateway, VirtualService, DestinationRule,
+#      AuthorizationPolicy, PeerAuthentication, Telemetry, WasmPlugin, etc.).
+#   2. Creates the istio-system Namespace (when CreateNamespace=true on the
+#      ArgoCD Application).
+#
+# This chart MUST be applied BEFORE istiod — the control plane references CRDs
+# that base installs. ArgoCD sync-wave -5 on this Application orders it before
+# istiod (wave 0).
+#
+# There are very few values to set; the defaults are sensible.
+
+defaultRevision: default

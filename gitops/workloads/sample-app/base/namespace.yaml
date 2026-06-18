@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: sample-app
+  labels:
+    app.kubernetes.io/managed-by: argocd
+    app.kubernetes.io/part-of: globalretail
+    # Layer 6 — enrol this namespace in the Ambient mesh. The istio-cni
+    # plugin watches for this label and, when present, redirects all pod
+    # traffic in this namespace through the node-local ztunnel. Existing
+    # pods are NOT automatically re-routed; they need a rollout restart
+    # after the label is added (see service-mesh/README.md §6.1).
+    istio.io/dataplane-mode: ambient

@@ -1,0 +1,30 @@
+# Second workload Application. Discovered by the root app-of-apps the
+# moment this file lands in main; ArgoCD then materialises the Kustomize
+# overlay under gitops/workloads/inventory-api/overlays/dev.
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: inventory-api
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/iscoct/globalretail-platform
+    targetRevision: main
+    path: gitops/workloads/inventory-api/overlays/dev
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: inventory-api
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ApplyOutOfSyncOnly=true

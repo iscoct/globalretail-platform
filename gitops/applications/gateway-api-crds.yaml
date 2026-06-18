@@ -1,0 +1,47 @@
+# Gateway API CRDs (kubernetes-sigs/gateway-api).
+#
+# Istio Ambient mode uses the Kubernetes Gateway API (HTTPRoute, Gateway) as
+# its native L7 routing API for the Waypoint proxy. The upstream `gateway-api`
+# repo ships the CRDs separately from Istio — installing them is a prereq
+# to creating any Waypoint or HTTPRoute.
+#
+# We point ArgoCD at the upstream repo's standard-channel CRDs and pin to
+# v1.2.0 (the version that matches Istio 1.24). When Istio is bumped, this
+# Application's targetRevision moves in lockstep.
+#
+# sync-wave: -10 — must apply before istio-base (-5) and istiod (0).
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: gateway-api-crds
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-10"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/kubernetes-sigs/gateway-api
+    targetRevision: v1.2.0
+    # The `standard` channel ships GA + beta resources (Gateway, HTTPRoute).
+    # The `experimental` channel adds GRPCRoute, TCPRoute, etc. — we don't
+    # need those for Layer 6.
+    path: config/crd/standard
+
+  destination:
+    # CRDs are cluster-scoped; the namespace here is a placeholder that
+    # ArgoCD requires but doesn't apply.
+    server: https://kubernetes.default.svc
+    namespace: default
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      # CRDs are large; ServerSideApply avoids the client-side annotation
+      # size limit (same reason as kube-prometheus-stack's CRDs).
+      - ServerSideApply=true

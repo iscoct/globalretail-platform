@@ -1,0 +1,49 @@
+# Helm values for the secrets-store-csi-driver chart.
+# Repo: https://kubernetes-sigs.github.io/secrets-store-csi-driver/
+#
+# This installs the DaemonSet that materialises K8s volumes from external
+# secret stores (Azure Key Vault, AWS Secrets Manager, GCP Secret Manager,
+# Vault, ...). The DRIVER alone doesn't know how to talk to any specific
+# store — that comes from a separate "provider" chart (see values-azure.yaml).
+
+# Sync K8s Secret objects from the mounted secrets — OFF by default because
+# the whole point of CSI is to avoid K8s Secrets (which are base64-encoded,
+# not encrypted at rest unless you've enabled KMS, and visible to anyone
+# with `get secret` RBAC). The flag enables a backwards-compatible mode for
+# legacy apps that still consume Secrets via env vars.
+syncSecret:
+  enabled: false
+
+# Auto-rotate secrets when they change in the upstream store.
+# Off by default; turning on means every (rotationPollInterval) the driver
+# re-fetches and atomically swaps the file. Apps that read once at startup
+# don't see the change without a restart — see Lab vs Production discussion.
+enableSecretRotation: false
+rotationPollInterval: 2m
+
+linux:
+  enabled: true
+  resources:
+    requests:
+      memory: 64Mi
+      cpu: 50m
+    limits:
+      memory: 192Mi
+      cpu: 200m
+windows:
+  enabled: false
+
+# CRITICAL for Workload Identity: tell the driver to request projected SA
+# tokens for the audience that the Azure provider expects. The driver
+# obtains tokens via the K8s TokenRequest API and forwards them to the
+# provider DaemonSet pod (which lives separately and cannot read the
+# workload pod's own token file).
+#
+# Without this, the provider fails to mount with:
+#   "failed to build auth config for mode None: failed to parse workload
+#    identity tokens, error: service account tokens not found"
+#
+# The audience MUST match `api://AzureADTokenExchange` (the Entra ID
+# token-exchange audience that our federated credential matches on).
+tokenRequests:
+  - audience: api://AzureADTokenExchange

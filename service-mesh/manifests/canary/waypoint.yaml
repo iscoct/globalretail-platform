@@ -1,0 +1,37 @@
+# Waypoint proxy for the sample-app namespace.
+#
+# In Ambient mode, ztunnel handles L4 (mTLS + L4 AuthZ) for ALL traffic to
+# Ambient-enrolled pods. For L7 features — HTTP routing, host/path-based
+# AuthZ, retries, traffic mirroring — Istio needs a Waypoint proxy.
+#
+# Mechanism:
+#   - A `Gateway` resource with `gatewayClassName: istio-waypoint` is the
+#     declaration. istiod sees it and deploys an Envoy waypoint pod.
+#   - The pod is REUSED across all Services that opt in via the label
+#     `istio.io/use-waypoint: <gateway-name>` on the Service.
+#   - Traffic to those Services is routed: client → ztunnel (mTLS) →
+#     waypoint pod (L7 policy + routing) → backend pod's ztunnel → backend.
+#
+# Resource cost: ~50–100Mi RAM per waypoint pod. One waypoint per
+# namespace is the recommended granularity; finer (per-SA) is possible.
+
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: sample-app-waypoint
+  namespace: sample-app
+  labels:
+    # The istio.io/waypoint-for label tells the waypoint which kinds of
+    # traffic it should accept:
+    #   - service: only Service-addressed traffic (default; what we want)
+    #   - workload: pod-to-pod IP traffic
+    #   - all: both
+    istio.io/waypoint-for: service
+spec:
+  gatewayClassName: istio-waypoint
+  listeners:
+    - name: mesh
+      # Port 15008 is Istio's HBONE port — the HTTP/2 CONNECT tunnel that
+      # carries mTLS-secured payloads between ztunnel and waypoint.
+      port: 15008
+      protocol: HBONE

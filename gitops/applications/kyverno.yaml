@@ -1,0 +1,66 @@
+# Kyverno admission controller + 4 ClusterPolicies in Audit mode.
+#
+# Multi-source Application. Same shape as observability:
+#   1. The upstream Helm chart (kyverno/kyverno)
+#   2. This repo as $values (our chart overrides)
+#   3. This repo as a path (the kustomize bundle of ClusterPolicies)
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kyverno
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  sources:
+    - repoURL: https://kyverno.github.io/kyverno
+      chart: kyverno
+      targetRevision: 3.8.1
+      helm:
+        valueFiles:
+          - $values/security/kyverno/values.yaml
+        releaseName: kyverno
+
+    - repoURL: https://github.com/iscoct/globalretail-platform
+      targetRevision: main
+      ref: values
+
+    - repoURL: https://github.com/iscoct/globalretail-platform
+      targetRevision: main
+      path: security/kyverno/policies
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: kyverno
+
+  # Kyverno's defaulting webhook adds several spec fields (admission,
+  # emitWarning, skipBackgroundRequests, allowExistingViolations) that we
+  # don't declare in our ClusterPolicy YAML. Without ignoreDifferences,
+  # ArgoCD sees a diff between git (no field) and cluster (field set) and
+  # marks the Application OutOfSync forever. The CRDs ship with auxiliary
+  # status fields that drift similarly.
+  ignoreDifferences:
+    - group: kyverno.io
+      kind: ClusterPolicy
+      jqPathExpressions:
+        - .spec.admission
+        - .spec.emitWarning
+        - .spec.rules[].skipBackgroundRequests
+        - .spec.rules[].validate.allowExistingViolations
+    - group: apiextensions.k8s.io
+      kind: CustomResourceDefinition
+      jsonPointers:
+        - /spec/conversion/webhook/clientConfig/caBundle
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ApplyOutOfSyncOnly=true
+      - ServerSideApply=true
+      - RespectIgnoreDifferences=true

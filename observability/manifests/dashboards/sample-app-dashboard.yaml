@@ -1,0 +1,147 @@
+# Grafana dashboard for the sample-app, delivered as a ConfigMap that the
+# Grafana sidecar (configured in ../../kube-prometheus-stack/values.yaml)
+# picks up automatically.
+#
+# The label `grafana_dashboard: "1"` is what the sidecar matches; the
+# `grafana_folder` annotation puts the dashboard into a named Grafana
+# folder. Adding more dashboards = more ConfigMaps with the same label.
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sample-app-dashboard
+  # Lives in the workload's namespace; sidecar searches ALL namespaces
+  # because of searchNamespace=ALL in the chart values.
+  namespace: sample-app
+  labels:
+    grafana_dashboard: '1'
+    app.kubernetes.io/name: sample-app
+    app.kubernetes.io/part-of: globalretail
+  annotations:
+    grafana_folder: GlobalRetail
+data:
+  # The JSON is consumed verbatim by Grafana. Time series panels with PromQL.
+  # Dashboard structure: 5 panels in a single row layout.
+  sample-app-dashboard.json: |
+    {
+      "schemaVersion": 39,
+      "title": "GlobalRetail sample-app",
+      "tags": ["globalretail", "sample-app"],
+      "timezone": "browser",
+      "refresh": "30s",
+      "time": { "from": "now-30m", "to": "now" },
+      "panels": [
+        {
+          "type": "stat",
+          "title": "SLI: /health <100ms (5m)",
+          "id": 1,
+          "gridPos": { "h": 6, "w": 6, "x": 0, "y": 0 },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "min": 0,
+              "max": 1,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "red", "value": null },
+                  { "color": "orange", "value": 0.95 },
+                  { "color": "green", "value": 0.99 }
+                ]
+              }
+            }
+          },
+          "options": {
+            "reduceOptions": { "calcs": ["lastNotNull"] },
+            "colorMode": "background",
+            "graphMode": "area"
+          },
+          "targets": [
+            {
+              "expr": "sample_app:health_sli:ratio5m",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "type": "stat",
+          "title": "Health checks total (last value)",
+          "id": 2,
+          "gridPos": { "h": 6, "w": 6, "x": 6, "y": 0 },
+          "fieldConfig": { "defaults": { "unit": "short" } },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
+          "targets": [
+            {
+              "expr": "sum(health_checks_total{app=\"globalretail-sample-app\"})",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "type": "timeseries",
+          "title": "HTTP request rate by route + status",
+          "id": 3,
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+          "fieldConfig": { "defaults": { "unit": "reqps" } },
+          "targets": [
+            {
+              "expr": "sum by (route, status) (rate(http_request_duration_seconds_count{app=\"globalretail-sample-app\"}[1m]))",
+              "legendFormat": "{{route}} {{status}}",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "type": "timeseries",
+          "title": "HTTP request latency (p50/p95/p99) on /health",
+          "id": 4,
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
+          "fieldConfig": { "defaults": { "unit": "s" } },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.50, sum by (le) (rate(http_request_duration_seconds_bucket{app=\"globalretail-sample-app\", route=\"/health\"}[5m])))",
+              "legendFormat": "p50",
+              "refId": "A"
+            },
+            {
+              "expr": "histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{app=\"globalretail-sample-app\", route=\"/health\"}[5m])))",
+              "legendFormat": "p95",
+              "refId": "B"
+            },
+            {
+              "expr": "histogram_quantile(0.99, sum by (le) (rate(http_request_duration_seconds_bucket{app=\"globalretail-sample-app\", route=\"/health\"}[5m])))",
+              "legendFormat": "p99",
+              "refId": "C"
+            }
+          ]
+        },
+        {
+          "type": "timeseries",
+          "title": "Process RSS memory",
+          "id": 5,
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+          "fieldConfig": { "defaults": { "unit": "decbytes" } },
+          "targets": [
+            {
+              "expr": "process_resident_memory_bytes{app=\"globalretail-sample-app\"}",
+              "legendFormat": "{{pod}}",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "type": "timeseries",
+          "title": "Event loop lag (p99, 1m)",
+          "id": 6,
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 14 },
+          "fieldConfig": { "defaults": { "unit": "s" } },
+          "targets": [
+            {
+              "expr": "nodejs_eventloop_lag_p99_seconds{app=\"globalretail-sample-app\"}",
+              "legendFormat": "{{pod}}",
+              "refId": "A"
+            }
+          ]
+        }
+      ]
+    }

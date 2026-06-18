@@ -46,7 +46,7 @@ variable "location_short" {
 }
 
 variable "vnet_address_space" {
-  description = "CIDR block(s) for the platform VNet."
+  description = "CIDR block(s) for the platform VNet. Must be large enough to contain the subnets defined in modules/network."
   type        = list(string)
   default     = ["10.0.0.0/16"]
 }

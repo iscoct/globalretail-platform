@@ -1,0 +1,49 @@
+# Kiali — service-mesh observability UI.
+#
+# Reads from the in-cluster Prometheus (Layer 4) to build the service graph
+# and surface mTLS status, AuthorizationPolicy, traffic flow, and per-edge
+# RED metrics (rate / errors / duration).
+#
+# sync-wave: 5 — after the Istio data plane is up so the prometheus istio_*
+# metrics exist when Kiali queries them.
+#
+# Anonymous auth (lab convenience). Access via port-forward:
+#   kubectl port-forward svc/kiali -n istio-system 20001:20001
+#   open http://localhost:20001/kiali
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kiali
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "5"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  sources:
+    - repoURL: https://kiali.org/helm-charts
+      chart: kiali-server
+      targetRevision: 2.4.0
+      helm:
+        valueFiles:
+          - $values/service-mesh/values/kiali-values.yaml
+        releaseName: kiali
+
+    - repoURL: https://github.com/iscoct/globalretail-platform
+      targetRevision: main
+      ref: values
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: istio-system
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - ApplyOutOfSyncOnly=true
+      - ServerSideApply=true

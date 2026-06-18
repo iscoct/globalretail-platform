@@ -1,0 +1,47 @@
+# Istio base — CRDs + istio-system namespace.
+#
+# First of the four Istio charts. Installs the Istio CRDs (Gateway,
+# VirtualService, DestinationRule, AuthorizationPolicy, PeerAuthentication,
+# Telemetry, etc.) and creates istio-system if missing.
+#
+# Multi-source: chart from upstream + $values from this repo.
+#
+# sync-wave: -5 — after gateway-api-crds (-10), before istiod (0).
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: istio-base
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-5"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  sources:
+    - repoURL: https://istio-release.storage.googleapis.com/charts
+      chart: base
+      targetRevision: 1.24.2
+      helm:
+        valueFiles:
+          - $values/service-mesh/values/istio-base-values.yaml
+        releaseName: istio-base
+
+    - repoURL: https://github.com/iscoct/globalretail-platform
+      targetRevision: main
+      ref: values
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: istio-system
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ApplyOutOfSyncOnly=true
+      - ServerSideApply=true

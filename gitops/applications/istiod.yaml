@@ -1,0 +1,45 @@
+# Istiod — Istio control plane.
+#
+# Reads the CRDs installed by istio-base (sync-wave -5) and starts the xDS
+# server, validating webhook, and root CA. With `profile: ambient` in values,
+# the chart skips the sidecar injection webhook and configures istiod to
+# program ztunnel + waypoints instead.
+#
+# sync-wave: 0 — after istio-base, before cni (1) and ztunnel (2).
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: istiod
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  sources:
+    - repoURL: https://istio-release.storage.googleapis.com/charts
+      chart: istiod
+      targetRevision: 1.24.2
+      helm:
+        valueFiles:
+          - $values/service-mesh/values/istiod-values.yaml
+        releaseName: istiod
+
+    - repoURL: https://github.com/iscoct/globalretail-platform
+      targetRevision: main
+      ref: values
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: istio-system
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - ApplyOutOfSyncOnly=true
+      - ServerSideApply=true

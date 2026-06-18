@@ -1,0 +1,14 @@
+# Canary demo — sample-app v2 + traffic split + in-mesh test client.
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - mesh-test-namespace.yaml
+  - waypoint.yaml
+  - destination-rule.yaml
+  - virtual-service.yaml
+  - curl-client.yaml
+  # Note: sample-app v2 Deployment lives at
+  # gitops/workloads/sample-app/base/deployment-v2.yaml so it inherits the
+  # overlay's ACR image rewrite. Only the mesh routing CRDs live here.

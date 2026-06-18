@@ -1,0 +1,74 @@
+# In-mesh curl client — drives the canary demo traffic.
+#
+# Why we need this: `kubectl port-forward` connects to the kube-apiserver
+# which proxies via the kubelet → pod's network namespace. That path is
+# host-network, which bypasses ztunnel and therefore bypasses the
+# waypoint. Without a waypoint, the VirtualService is never evaluated,
+# and the canary split looks broken even though everything is wired
+# correctly.
+#
+# An in-mesh pod calling the sample-app Service via DNS goes through
+# the local ztunnel → waypoint → backend ztunnel path. The split applies.
+#
+# To inspect:
+#   kubectl logs -n mesh-test -l app=curl-client --tail=30
+#   You should see ~9 v1 responses + ~1 v2 response per 10 calls.
+
+# --- ServiceAccount (identity for the AuthorizationPolicy) -----------------
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: curl-client
+  namespace: mesh-test
+
+# --- Deployment ------------------------------------------------------------
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: curl-client
+  namespace: mesh-test
+  labels:
+    app: curl-client
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: curl-client
+  template:
+    metadata:
+      labels:
+        app: curl-client
+    spec:
+      serviceAccountName: curl-client
+      containers:
+        - name: curl
+          # curlimages/curl is the official minimal image (Alpine + curl).
+          # No bash, no python, no surprises. Runs as non-root by default.
+          image: curlimages/curl:8.10.1
+          # An infinite loop hitting /version every 2s. The pod's logs
+          # become the canary visualisation.
+          command: ["sh", "-c"]
+          args:
+            - |
+              while true; do
+                curl -s --max-time 2 \
+                  http://sample-app.sample-app.svc.cluster.local/version \
+                  || echo "{\"error\": \"timeout\"}"
+                echo
+                sleep 2
+              done
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 50m
+              memory: 32Mi
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]

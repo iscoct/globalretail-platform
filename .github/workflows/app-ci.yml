@@ -176,15 +176,31 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Trivy image scan (HIGH, CRITICAL = fail)
-        uses: aquasecurity/trivy-action@0.36.0
+      # Scan #1: SARIF output for the GitHub Security tab. Does NOT fail the
+      # build — uploading findings is informational. The actual gate is scan #2.
+      - name: Trivy image scan — SARIF upload (informational)
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ${{ env.IMAGE_REPO }}:ci
           format: sarif
           output: trivy-results.sarif
           severity: HIGH,CRITICAL
+          exit-code: '0'
+          ignore-unfixed: true
+
+      # Scan #2: the gate. Table format + ignorefile actually honours the
+      # ignore list when computing the exit code (the SARIF flow does not).
+      # If anything HIGH or CRITICAL slips past the ignorefile, this step
+      # fails and blocks the push.
+      - name: Trivy image scan — gate (HIGH, CRITICAL = fail)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE_REPO }}:ci
+          format: table
+          severity: HIGH,CRITICAL
           exit-code: '1'
           ignore-unfixed: true
+          trivyignores: ${{ env.APP_DIR }}/.trivyignore
 
       - name: Upload Trivy results to GitHub Security tab
         if: always()

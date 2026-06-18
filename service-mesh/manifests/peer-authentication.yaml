@@ -1,0 +1,53 @@
+# PeerAuthentication — STRICT mesh-wide default, PERMISSIVE for the two
+# app namespaces that need to be scraped by NON-mesh Prometheus pods.
+#
+# Background: in Ambient, STRICT mTLS rejects the TCP connection at the
+# ztunnel layer BEFORE the AuthorizationPolicy is evaluated. Any plaintext
+# client (e.g., kube-prometheus-stack's Prometheus pod, which is NOT in the
+# mesh in our setup) gets denied with "policy rejection: istio_converted_
+# static_strict" — and there is no AuthZ rule we can write to allow it,
+# because the connection never makes it past TLS negotiation.
+#
+# The lab pattern: keep STRICT as the mesh-wide default (so any new namespace
+# added to the mesh starts zero-trust), but override to PERMISSIVE for the
+# two app namespaces that receive scrape traffic from outside the mesh.
+# Encryption between mesh peers still happens (ztunnel auto-mTLS); the
+# difference is that plaintext peers are tolerated, with AuthZ as the gate.
+#
+# Production: either (a) add the Prometheus pod to the mesh (label its
+# namespace Ambient) and keep STRICT everywhere, or (b) accept that some
+# observability tooling lives outside the mesh and run PERMISSIVE in the
+# corresponding app namespaces. We picked (b) for the lab so the change is
+# minimal — see service-mesh/README.md §6.2 for the discussion.
+
+# --- Mesh-wide default: STRICT ---------------------------------------------
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: default
+  namespace: istio-system
+spec:
+  mtls:
+    mode: STRICT
+
+# --- Per-namespace override: PERMISSIVE for sample-app ---------------------
+---
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: allow-non-mesh-scrape
+  namespace: sample-app
+spec:
+  mtls:
+    mode: PERMISSIVE
+
+# --- Per-namespace override: PERMISSIVE for inventory-api -----------------
+---
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: allow-non-mesh-scrape
+  namespace: inventory-api
+spec:
+  mtls:
+    mode: PERMISSIVE

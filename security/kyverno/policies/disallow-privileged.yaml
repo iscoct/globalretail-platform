@@ -1,0 +1,59 @@
+# Pods MUST NOT request privileged mode or escalation.
+#
+# Why: a privileged container can mount the host's filesystem, see host
+# processes, load kernel modules, and effectively act as root on the
+# node. There are workloads that legitimately need this (CNI plugins,
+# node-exporter, csi-drivers — anything that talks to the kubelet or
+# kernel), so we EXCLUDE the namespaces where those run.
+#
+# The Pod Security Standards "restricted" profile is the formal version
+# of this; we hand-roll the checks here so the policy is explicit and
+# the audit message names the exact field that's wrong.
+
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: disallow-privileged
+  annotations:
+    policies.kyverno.io/title: 'Disallow privileged containers + privilege escalation'
+    policies.kyverno.io/category: 'Pod Security Standards (Baseline)'
+    policies.kyverno.io/severity: 'high'
+    policies.kyverno.io/subject: 'Pod'
+spec:
+  validationFailureAction: Audit
+  background: true
+  rules:
+    - name: no-privileged-containers
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+      exclude:
+        any:
+          - resources:
+              namespaces:
+                - kube-system
+                - kube-public
+                - kube-node-lease
+                - kyverno
+                # node-exporter from kube-prometheus-stack needs host
+                # access — node-exporter's whole point is reading
+                # /proc and /sys from the host kernel.
+                - monitoring
+                # secrets-store-csi-driver runs DaemonSet pods that
+                # mount the kubelet plugin socket — that needs
+                # hostPath. Excluded from the policy.
+                - kube-secrets-store-csi-driver
+      validate:
+        foreach:
+          - list: 'request.object.spec.containers'
+            # message lives in foreach (see require-resources.yaml comment).
+            deny:
+              conditions:
+                any:
+                  - key: '{{ element.securityContext.privileged || `false` }}'
+                    operator: Equals
+                    value: true
+                  - key: '{{ element.securityContext.allowPrivilegeEscalation || `false` }}'
+                    operator: Equals
+                    value: true
