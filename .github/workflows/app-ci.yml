@@ -5,7 +5,11 @@
 #   - pull_request to main (paths under apps/sample-app/**): run all quality
 #     gates and BUILD/SCAN the image, but DO NOT push.
 #   - push to main (paths under apps/sample-app/**): run all quality gates,
-#     build, scan, AND push to ACR.
+#     build, scan, AND push to the configured container registry.
+#
+# Registry target is selected by the CONTAINER_REGISTRY repo/org variable:
+#   - 'acr'  (default) -> Azure Container Registry, via OIDC (federated identity).
+#   - 'ghcr'           -> GitHub Container Registry, via the built-in GITHUB_TOKEN.
 #
 # Authentication to Azure is OIDC-only (federated identity).
 # No PATs, no client secrets, no service principal passwords anywhere.
@@ -140,10 +144,11 @@ jobs:
         run: npm run audit:ci
 
   # ------------------------------------------------------------------------- #
-  # Stage 4-5 — Build the image, scan it, push to ACR.
+  # Stage 4-5 — Build the image, scan it, push to the configured registry.
   #
   # Build + scan run on every trigger. Push only runs on push to main (see
-  # the `if:` guard).
+  # the `if:` guards). The push target (ACR or GHCR) is chosen by the
+  # CONTAINER_REGISTRY variable; only the steps for the selected registry run.
   # ------------------------------------------------------------------------- #
   build-scan-push:
     name: Build, scan, push
@@ -151,11 +156,16 @@ jobs:
     needs: [test, sast, sca]
     permissions:
       contents: read
-      id-token: write         # required to mint the OIDC token for azure/login
+      id-token: write         # required to mint the OIDC token for azure/login (ACR)
+      packages: write         # required to push to GHCR with GITHUB_TOKEN
       security-events: write  # to upload Trivy's SARIF findings
     env:
       IMAGE_REPO: globalretail/sample-app
       IMAGE_TAG_SHA: sha-${{ github.sha }}
+      # Container registry target: 'acr' (Azure Container Registry) or 'ghcr'
+      # (GitHub Container Registry). Override with the repo/org variable
+      # CONTAINER_REGISTRY; defaults to acr when unset.
+      CONTAINER_REGISTRY: ${{ vars.CONTAINER_REGISTRY || 'acr' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -209,9 +219,27 @@ jobs:
           sarif_file: trivy-results.sarif
           category: trivy-image
 
-      # ------------- Push to ACR — only on push to main --------------------- #
-      - name: Azure login (OIDC, App UAMI)
+      # ------------- Push — only on push to main ---------------------------- #
+      - name: Resolve registry target
+        id: registry
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          case "${CONTAINER_REGISTRY}" in
+            acr)
+              echo "login_server=${{ vars.ACR_LOGIN_SERVER }}" >> "$GITHUB_OUTPUT"
+              ;;
+            ghcr)
+              echo "login_server=ghcr.io/${{ github.repository_owner }}" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "::error::Unsupported CONTAINER_REGISTRY '${CONTAINER_REGISTRY}'. Use 'acr' or 'ghcr'."
+              exit 1
+              ;;
+          esac
+
+      # --- ACR auth (OIDC) — only when CONTAINER_REGISTRY=acr --- #
+      - name: Azure login (OIDC, App UAMI)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && env.CONTAINER_REGISTRY == 'acr'
         uses: azure/login@v2
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID_APP }}
@@ -219,31 +247,47 @@ jobs:
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
       - name: ACR login
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && env.CONTAINER_REGISTRY == 'acr'
         run: az acr login --name "${{ vars.ACR_NAME }}"
 
-      - name: Tag image with ACR reference
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        run: |
-          docker tag "${IMAGE_REPO}:${IMAGE_TAG_SHA}" "${{ vars.ACR_LOGIN_SERVER }}/${IMAGE_REPO}:${IMAGE_TAG_SHA}"
-          docker tag "${IMAGE_REPO}:${IMAGE_TAG_SHA}" "${{ vars.ACR_LOGIN_SERVER }}/${IMAGE_REPO}:main"
+      # --- GHCR auth (GITHUB_TOKEN) — only when CONTAINER_REGISTRY=ghcr --- #
+      - name: GHCR login
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && env.CONTAINER_REGISTRY == 'ghcr'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Push to ACR
+      - name: Tag image with registry reference
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          LOGIN_SERVER: ${{ steps.registry.outputs.login_server }}
         run: |
-          docker push "${{ vars.ACR_LOGIN_SERVER }}/${IMAGE_REPO}:${IMAGE_TAG_SHA}"
-          docker push "${{ vars.ACR_LOGIN_SERVER }}/${IMAGE_REPO}:main"
+          docker tag "${IMAGE_REPO}:${IMAGE_TAG_SHA}" "${LOGIN_SERVER}/${IMAGE_REPO}:${IMAGE_TAG_SHA}"
+          docker tag "${IMAGE_REPO}:${IMAGE_TAG_SHA}" "${LOGIN_SERVER}/${IMAGE_REPO}:main"
+
+      - name: Push to registry
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          LOGIN_SERVER: ${{ steps.registry.outputs.login_server }}
+        run: |
+          docker push "${LOGIN_SERVER}/${IMAGE_REPO}:${IMAGE_TAG_SHA}"
+          docker push "${LOGIN_SERVER}/${IMAGE_REPO}:main"
 
       - name: Job summary
         if: always()
+        env:
+          LOGIN_SERVER: ${{ steps.registry.outputs.login_server }}
         run: |
           {
             echo "### globalretail-sample-app CI"
             echo ""
             echo "- Image repo: \`${IMAGE_REPO}\`"
             echo "- Build tag : \`${IMAGE_TAG_SHA}\`"
+            echo "- Registry  : \`${CONTAINER_REGISTRY}\`"
             if [[ "${{ github.event_name }}" == "push" && "${{ github.ref }}" == "refs/heads/main" ]]; then
-              echo "- Pushed to : \`${{ vars.ACR_LOGIN_SERVER }}/${IMAGE_REPO}:${IMAGE_TAG_SHA}\` and \`:main\`"
+              echo "- Pushed to : \`${LOGIN_SERVER}/${IMAGE_REPO}:${IMAGE_TAG_SHA}\` and \`:main\`"
             else
               echo "- Push     : skipped (this is a PR or non-main push)"
             fi
